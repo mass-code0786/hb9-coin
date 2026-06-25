@@ -1,0 +1,368 @@
+@media(max-width:800px){
+  .defi-dashboard-active{
+    --defi-bg:#050507;
+    --defi-panel:rgba(18,8,31,.62);
+    --defi-panel-strong:rgba(14,7,24,.86);
+    --defi-purple:#9D4EDD;
+    --defi-purple-deep:#7B2CBF;
+    --defi-purple-soft:#C77DFF;
+    --defi-blue:#3D8BFF;
+    --defi-line:rgba(199,125,255,.28);
+    background:radial-gradient(circle at 16% -6%,rgba(157,78,221,.4),transparent 34%),radial-gradient(circle at 92% 12%,rgba(61,139,255,.26),transparent 30%),linear-gradient(180deg,#050507 0%,#0B0615 42%,#12081F 100%)!important;
+  }
+  .defi-dashboard-active:before{
+    content:""!important;
+    position:fixed!important;
+    inset:0!important;
+    z-index:-1!important;
+    opacity:.6!important;
+    background:radial-gradient(circle at 50% 18%,rgba(199,125,255,.13),transparent 28%),linear-gradient(120deg,transparent,rgba(157,78,221,.05),transparent)!important;
+    pointer-events:none!important;
+  }
+  .defi-dashboard-active #app,
+  .defi-dashboard-active .shell,
+  .defi-dashboard-active .content{
+    max-width:100%!important;
+    overflow-x:hidden!important;
+  }
+  .defi-dashboard-active .mobile-app-header{
+    height:72px!important;
+    padding:0 16px!important;
+    background:rgba(5,5,7,.62)!important;
+    border-bottom:1px solid rgba(199,125,255,.18)!important;
+    box-shadow:0 12px 34px rgba(0,0,0,.34)!important;
+    backdrop-filter:blur(18px)!important;
+    -webkit-backdrop-filter:blur(18px)!important;
+  }
+  .defi-dashboard-active .mobile-app-header .brand{
+    position:static!important;
+    transform:none!important;
+    display:flex!important;
+    align-items:center!important;
+    justify-content:center!important;
+    width:48px!important;
+    height:48px!important;
+    gap:0!important;
+    font-size:0!important;
+  }
+  .defi-dashboard-active .mobile-app-header .hb9-logo,
+  .defi-dashboard-active .mobile-app-header .hb9-logo-mark{
+    width:42px!important;
+    height:42px!important;
+    min-width:42px!important;
+    background:transparent!important;
+    border:0!important;
+    box-shadow:none!important;
+    border-radius:0!important;
+    padding:0!important;
+    margin:0!important;
+  }
+  .defi-dashboard-active .mobile-head-action{
+    width:44px!important;
+    height:44px!important;
+    border:1px solid rgba(199,125,255,.36)!important;
+    border-radius:16px!important;
+    color:#F7EDFF!important;
+    background:linear-gradient(145deg,rgba(25,12,42,.86),rgba(7,7,12,.72))!important;
+    box-shadow:0 0 22px rgba(157,78,221,.18)!important;
+    backdrop-filter:blur(12px)!important;
+  }
+  .defi-dashboard-active .sidebar{
+    display:none!important;
+  }
+  .defi-dashboard-active .content{
+    padding:88px 12px 112px!important;
+  }
+  .defi-dashboard-active .content>.top{
+    display:none!important;
+  }
+  .defi-dashboard-active .hb9-profile-card{
+    display:block!important;
+    max-height:none!important;
+    margin:0 0 14px!important;
+    padding:18px!important;
+    border:1px solid var(--defi-line)!important;
+    border-radius:28px!important;
+    background:linear-gradient(135deg,rgba(24,10,41,.78),rgba(6,6,10,.86) 62%,rgba(18,9,32,.76))!important;
+    box-shadow:0 18px 48px rgba(0,0,0,.38),0 0 26px rgba(157,78,221,.16)!important;
+    backdrop-filter:blur(18px)!important;
+    overflow:hidden!important;
+  }
+  .defi-dashboard-active .exchange-dashboard-wallet{
+    position:relative!important;
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:12px!important;
+    margin:0!important;
+  }
+  .defi-dashboard-active .exchange-dashboard-wallet div{
+    position:relative!important;
+    min-height:94px!important;
+    padding:16px!important;
+    border:1px solid rgba(199,125,255,.3)!important;
+    border-radius:24px!important;
+    background:linear-gradient(145deg,rgba(18,8,31,.72),rgba(4,5,9,.72))!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.06),0 0 24px rgba(157,78,221,.13)!important;
+    overflow:hidden!important;
+  }
+  .defi-dashboard-active .exchange-dashboard-wallet div:after,
+  .defi-dashboard-page .defi-volume-grid article:after{
+    content:""!important;
+    position:absolute!important;
+    inset:auto 8px 8px 8px!important;
+    height:28px!important;
+    opacity:.42!important;
+    background:linear-gradient(135deg,transparent 0 10%,rgba(199,125,255,.55) 11% 13%,transparent 14% 28%,rgba(61,139,255,.55) 29% 31%,transparent 32% 52%,rgba(199,125,255,.5) 53% 55%,transparent 56%)!important;
+    clip-path:polygon(0 70%,18% 52%,32% 62%,48% 28%,63% 42%,78% 18%,100% 34%,100% 100%,0 100%)!important;
+    animation:defiFloat 5s ease-in-out infinite alternate!important;
+    pointer-events:none!important;
+  }
+  .defi-dashboard-active .exchange-dashboard-wallet small{
+    display:block!important;
+    color:#BCA8D8!important;
+    font-size:12px!important;
+    letter-spacing:.2px!important;
+  }
+  .defi-dashboard-active .exchange-dashboard-wallet b{
+    display:block!important;
+    margin-top:8px!important;
+    color:#FFFFFF!important;
+    font-size:22px!important;
+    letter-spacing:-.4px!important;
+    white-space:nowrap!important;
+  }
+  .defi-dashboard-active .quick-actions{
+    display:grid!important;
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:10px!important;
+    margin:0 0 16px!important;
+  }
+  .defi-dashboard-active .quick-actions button{
+    min-height:92px!important;
+    padding:12px 8px!important;
+    border:1px solid rgba(199,125,255,.32)!important;
+    border-radius:24px!important;
+    color:#F7EDFF!important;
+    font-size:12px!important;
+    font-weight:800!important;
+    background:linear-gradient(145deg,rgba(28,13,47,.78),rgba(7,7,12,.82))!important;
+    box-shadow:0 14px 34px rgba(0,0,0,.28),0 0 20px rgba(157,78,221,.12)!important;
+  }
+  .defi-dashboard-active .quick-actions button:first-child{
+    color:#fff!important;
+    background:linear-gradient(145deg,#9D4EDD,#7B2CBF 58%,#311060)!important;
+    box-shadow:0 16px 38px rgba(157,78,221,.35),0 0 26px rgba(61,139,255,.16)!important;
+  }
+  .defi-dashboard-active .quick-actions button span{
+    display:grid!important;
+    place-items:center!important;
+    width:34px!important;
+    height:34px!important;
+    border-radius:50%!important;
+    color:#fff!important;
+    background:linear-gradient(135deg,#C77DFF,#7B2CBF)!important;
+    box-shadow:0 0 18px rgba(199,125,255,.42)!important;
+    font-size:16px!important;
+  }
+  .defi-dashboard-active .income{
+    margin-top:0!important;
+    padding:16px!important;
+    border:1px solid rgba(199,125,255,.26)!important;
+    border-radius:28px!important;
+    background:linear-gradient(150deg,rgba(18,8,31,.72),rgba(5,5,7,.82))!important;
+    box-shadow:0 20px 54px rgba(0,0,0,.34),0 0 28px rgba(157,78,221,.12)!important;
+    backdrop-filter:blur(18px)!important;
+  }
+  .defi-dashboard-active .compact-income-head h2{
+    color:#FFFFFF!important;
+    font-size:18px!important;
+    letter-spacing:-.2px!important;
+  }
+  .defi-dashboard-active .income-pairs{
+    display:grid!important;
+    grid-template-columns:1fr!important;
+    gap:12px!important;
+  }
+  .defi-dashboard-active .income-pair{
+    position:relative!important;
+    display:grid!important;
+    grid-template-columns:auto minmax(0,1fr)!important;
+    align-items:center!important;
+    gap:12px!important;
+    min-height:86px!important;
+    padding:14px 14px 14px 62px!important;
+    border:1px solid rgba(199,125,255,.24)!important;
+    border-radius:22px!important;
+    background:linear-gradient(145deg,rgba(18,8,31,.58),rgba(6,6,11,.82))!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 10px 28px rgba(0,0,0,.2)!important;
+    overflow:hidden!important;
+  }
+  .defi-dashboard-active .income-pair:before{
+    content:""!important;
+    position:absolute!important;
+    left:14px!important;
+    top:50%!important;
+    width:34px!important;
+    height:34px!important;
+    transform:translateY(-50%)!important;
+    border-radius:50%!important;
+    background:linear-gradient(135deg,#C77DFF,#9D4EDD 52%,#3D8BFF)!important;
+    box-shadow:0 0 18px rgba(199,125,255,.42)!important;
+  }
+  .defi-dashboard-active .income-pair:after{
+    content:""!important;
+    position:absolute!important;
+    right:-28px!important;
+    top:-38px!important;
+    width:108px!important;
+    height:108px!important;
+    border-radius:50%!important;
+    background:radial-gradient(circle,rgba(157,78,221,.2),transparent 62%)!important;
+    pointer-events:none!important;
+  }
+  .defi-dashboard-active .income-pair label{
+    color:#FFFFFF!important;
+    font-size:14px!important;
+    font-weight:900!important;
+    line-height:1.15!important;
+  }
+  .defi-dashboard-active .income-pair-details{
+    justify-self:end!important;
+    align-items:flex-end!important;
+    max-width:170px!important;
+  }
+  .defi-dashboard-active .income-pair small{
+    color:#BCA8D8!important;
+    font-size:10px!important;
+  }
+  .defi-dashboard-active .income-pair strong{
+    color:#FFFFFF!important;
+    font-size:18px!important;
+    line-height:1.15!important;
+    white-space:nowrap!important;
+  }
+  .defi-dashboard-active .income-pair em{
+    color:#8D78AA!important;
+  }
+  .defi-dashboard-page>.grid.stats{
+    display:none!important;
+  }
+  .defi-dashboard-page .defi-volume-grid{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:12px!important;
+    margin:16px 0 0!important;
+  }
+  .defi-dashboard-page .defi-volume-grid article{
+    position:relative!important;
+    min-width:0!important;
+    min-height:118px!important;
+    padding:16px!important;
+    border:1px solid rgba(199,125,255,.3)!important;
+    border-radius:24px!important;
+    background:linear-gradient(145deg,rgba(20,9,34,.76),rgba(6,6,11,.86))!important;
+    box-shadow:0 16px 40px rgba(0,0,0,.3),0 0 24px rgba(157,78,221,.12)!important;
+    overflow:hidden!important;
+  }
+  .defi-dashboard-page .defi-volume-grid span{
+    display:block!important;
+    color:#BCA8D8!important;
+    font-size:11px!important;
+    line-height:1.25!important;
+  }
+  .defi-dashboard-page .defi-volume-grid strong{
+    display:block!important;
+    margin-top:8px!important;
+    color:#FFFFFF!important;
+    font-size:20px!important;
+    letter-spacing:-.4px!important;
+    overflow-wrap:anywhere!important;
+  }
+  .defi-dashboard-page .defi-volume-grid i{
+    position:absolute!important;
+    right:13px!important;
+    top:13px!important;
+    width:28px!important;
+    height:28px!important;
+    border-radius:50%!important;
+    background:linear-gradient(135deg,#C77DFF,#3D8BFF)!important;
+    opacity:.86!important;
+    box-shadow:0 0 20px rgba(199,125,255,.35)!important;
+  }
+  .defi-dashboard-active .card.income:has(.income-header h2){
+    border-color:rgba(157,78,221,.24)!important;
+  }
+  .defi-dashboard-active .card.income:not(:has(.income-pairs)),
+  .defi-dashboard-active .card.income:has(.incomegrid){
+    display:none!important;
+  }
+  .defi-bottom-nav{
+    position:fixed!important;
+    z-index:80!important;
+    left:12px!important;
+    right:12px!important;
+    bottom:12px!important;
+    display:grid!important;
+    grid-template-columns:repeat(5,minmax(0,1fr))!important;
+    gap:4px!important;
+    padding:8px!important;
+    border:1px solid rgba(199,125,255,.28)!important;
+    border-radius:24px!important;
+    background:linear-gradient(145deg,rgba(15,7,26,.8),rgba(4,4,8,.82))!important;
+    box-shadow:0 18px 54px rgba(0,0,0,.48),0 0 30px rgba(157,78,221,.2)!important;
+    backdrop-filter:blur(20px)!important;
+    -webkit-backdrop-filter:blur(20px)!important;
+  }
+  .defi-bottom-nav button{
+    display:grid!important;
+    place-items:center!important;
+    gap:3px!important;
+    min-width:0!important;
+    min-height:50px!important;
+    padding:6px 2px!important;
+    border:0!important;
+    border-radius:18px!important;
+    color:#BCA8D8!important;
+    background:transparent!important;
+    box-shadow:none!important;
+  }
+  .defi-bottom-nav button.active,
+  .defi-bottom-nav button:hover{
+    color:#FFFFFF!important;
+    background:linear-gradient(145deg,rgba(157,78,221,.62),rgba(61,139,255,.2))!important;
+    box-shadow:0 0 20px rgba(157,78,221,.24)!important;
+  }
+  .defi-bottom-nav span{
+    display:grid!important;
+    place-items:center!important;
+    width:22px!important;
+    height:22px!important;
+    border-radius:50%!important;
+    font-size:13px!important;
+    background:rgba(255,255,255,.08)!important;
+  }
+  .defi-bottom-nav b{
+    font-size:9px!important;
+    font-weight:800!important;
+    line-height:1!important;
+  }
+  .defi-dashboard-active .hb9-logo,
+  .defi-dashboard-active .logo img{
+    background:transparent!important;
+    border:none!important;
+    box-shadow:none!important;
+    border-radius:0!important;
+  }
+  @keyframes defiFloat{
+    from{transform:translateY(0) translateX(-3px);opacity:.32}
+    to{transform:translateY(-4px) translateX(5px);opacity:.58}
+  }
+}
+
+@media(max-width:390px){
+  .defi-dashboard-active .content{padding-left:12px!important;padding-right:12px!important}
+  .defi-dashboard-active .income-pair{padding-right:12px!important}
+  .defi-dashboard-active .income-pair-details{max-width:154px!important}
+  .defi-dashboard-active .income-pair strong{font-size:17px!important}
+  .defi-dashboard-page .defi-volume-grid strong{font-size:18px!important}
+}

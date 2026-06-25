@@ -1,0 +1,13 @@
+{
+  "name": "hb9-staking",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HB9 Staking production app",
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "start": "node server.js",
+    "seed": "node scripts/seed.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "engines": { "node": ">=18" }
+}
