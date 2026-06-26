@@ -13,6 +13,8 @@ const PRODUCTION_DOMAIN = /^https:\/\/coin\.hb9\.live\/?$/i.test(APP_URL);
 const DEV_ONLY_DEMO = process.env.NODE_ENV !== 'production' && process.env.DEMO_MODE === 'true';
 const DEMO_MODE = DEV_ONLY_DEMO;
 const BSC_CHAIN = 'BSC';
+const USDT_BEP20_DECIMALS = 18;
+const RAW_USDT_MIGRATION_THRESHOLD = 1000000000;
 const USDT_BEP20_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 const usdtInterface = new Interface(USDT_BEP20_ABI);
 const TRANSFER_TOPIC = usdtInterface.getEvent('Transfer').topicHash;
@@ -42,7 +44,7 @@ const datePlus = (date, days) => { const d = new Date(date); d.setDate(d.getDate
 const roundCurrency = value => Math.round((value + Number.EPSILON) * 100) / 100;
 const hash = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(password, salt, 64).toString('hex') });
 const check = (password, user) => crypto.timingSafeEqual(Buffer.from(hash(password, user.salt).hash, 'hex'), Buffer.from(user.passwordHash, 'hex'));
-function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); return db; }
+function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); if(repairBep20RawUnitAmounts(db).corrected)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
 function initializeDB(){ DEV_ONLY_DEMO ? seedDevOnlyDemo() : seedProductionEmpty(); }
 function baseSettings(){
@@ -407,7 +409,7 @@ function parseBep20TransferWatcherLog(log){
   if(!Number.isInteger(log.index)||log.index<0)return {reason:'log index is invalid'};
   if(!Number.isInteger(log.blockNumber)||log.blockNumber<0)return {reason:'block number is invalid'};
   try{
-    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),6)),contractAddress:log.address??null,topics:log.topics,data:log.data}};
+    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),USDT_BEP20_DECIMALS)),contractAddress:log.address??null,topics:log.topics,data:log.data}};
   }catch(error){return {reason:`unable to decode Transfer log: ${error.message}`};}
 }
 function warnRejectedDepositWatcherLog(log,reason){console.warn('Deposit watcher rejected log:',{reason,...watcherLogContext(log)});}
@@ -468,6 +470,48 @@ function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress
   return failures;
 }
 function isZeroValueBep20Transfer(amount){return Number(amount)===0;}
+function humanUsdtAmount(rawAmount){
+  const value=Number(rawAmount);
+  return Number.isFinite(value)&&value>=RAW_USDT_MIGRATION_THRESHOLD?value/10**USDT_BEP20_DECIMALS:null;
+}
+function repairBep20RawUnitAmounts(db){
+  const correctedTransactions=new Map(), correctedDeposits=new Map(), correctedSweeps=new Map(), reserveDeltas=new Map();
+  const correct=(record,field,collection)=>{const corrected=humanUsdtAmount(record?.[field]);if(corrected===null)return;const previous=Number(record[field]);record[field]=corrected;collection.set(record.id??record.eventKey,{previous,corrected,record});};
+  for(const tx of db.blockchain_transactions||[])if(tx.chain===BSC_CHAIN)correct(tx,'amount',correctedTransactions);
+  for(const deposit of db.deposits||[])if(deposit.chain===BSC_CHAIN){correct(deposit,'amount',correctedDeposits);correct(deposit,'creditedAmount',correctedDeposits);}
+  const transactionAmounts=new Map((db.blockchain_transactions||[]).filter(tx=>tx.eventKey).map(tx=>[tx.eventKey,Number(tx.amount)]));
+  for(const ledger of db.wallet_ledger||[]){
+    if(ledger.asset!=='USDT'||ledger.reason!=='BEP20 deposit credited'||!transactionAmounts.has(ledger.refId))continue;
+    const corrected=transactionAmounts.get(ledger.refId);if(humanUsdtAmount(ledger.amount)!==null)ledger.amount=corrected;
+  }
+  for(const sweep of db.sweep_transactions||[]){
+    const deposit=correctedDeposits.get(sweep.depositId)?.record||(db.deposits||[]).find(item=>item.id===sweep.depositId);
+    if(!deposit||humanUsdtAmount(sweep.amount)===null)continue;
+    const previous=Number(sweep.amount), corrected=Number(deposit.creditedAmount??deposit.amount);sweep.amount=corrected;correctedSweeps.set(sweep.id,{previous,corrected,record:sweep});
+  }
+  for(const entry of db.reserve_ledger||[]){
+    if(entry.asset!=='USDT'||!correctedSweeps.has(entry.refId)||humanUsdtAmount(entry.amount)===null)continue;
+    const {corrected}=correctedSweeps.get(entry.refId),previous=Number(entry.amount);entry.amount=corrected;
+    const key=`${entry.asset}:${entry.walletType}`, sign=entry.direction==='debit'?-1:1;reserveDeltas.set(key,(reserveDeltas.get(key)||0)+((corrected-previous)*sign));
+  }
+  for(const wallet of db.reserve_wallets||[]){
+    const delta=reserveDeltas.get(`${wallet.asset}:${wallet.walletType}`);if(!delta)continue;
+    // A reserve consisting of legacy raw units cannot be safely corrected with
+    // floating-point subtraction (1e18 - 1e18 + 1 loses the final 1).
+    const rawBalance=humanUsdtAmount(wallet.balance);
+    wallet.balance=rawBalance===null?roundCurrency(Number(wallet.balance)+delta):rawBalance;
+    wallet.updatedAt=new Date().toISOString();
+  }
+  const corrected=correctedTransactions.size>0||correctedDeposits.size>0||correctedSweeps.size>0;
+  if(corrected){
+    const now=new Date().toISOString();
+    for(const record of [...correctedTransactions.values(),...correctedDeposits.values(),...correctedSweeps.values()])record.record.rawUnitMigrationAt=now;
+    db.auditLogs=db.auditLogs||[];
+    audit(db,'BEP20_RAW_UNIT_MIGRATED',{transactions:correctedTransactions.size,deposits:correctedDeposits.size,sweeps:correctedSweeps.size});
+    console.warn('Repaired legacy BEP20 raw-unit amounts:',{transactions:correctedTransactions.size,deposits:correctedDeposits.size,sweeps:correctedSweeps.size});
+  }
+  return {corrected,transactions:correctedTransactions.size,deposits:correctedDeposits.size,sweeps:correctedSweeps.size};
+}
 function recordBep20Transfer(db,input){
   const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=String(input.toAddress||'').trim().toLowerCase(), fromAddress=String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
   const failures=validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber});
@@ -588,11 +632,11 @@ async function executeSweep(db,sweep,provider){
       if(!sweep.gasTopupTxHash){const gasWallet=new Wallet(process.env.GAS_WALLET_PRIVATE_KEY,provider),tx=await gasWallet.sendTransaction({to:address.address,value:topup});if(!tx.hash)throw Error('Gas top-up broadcast did not return a transaction hash');Object.assign(sweep,{status:'gas_topup_broadcasted',gasTopupStatus:'broadcasted',gasTopupTxHash:tx.hash,gasTopupFrom:gasWallet.address,updatedAt:new Date().toISOString()});deposit.sweepStatus='gas_topup_broadcasted';audit(db,'TREASURY_SWEEP_GAS_TOPUP_BROADCAST',{sweepId:sweep.id,txHash:tx.hash,toAddress:address.address,amountBnb:String(topup)});}return;
     }
     sweep.gasTopupStatus=sweep.gasTopupStatus==='not_required'?'available':sweep.gasTopupStatus;
-    const signer=depositPrivateSigner(address.address,address.hdIndex,provider),token=new Contract(getAddress(process.env.USDT_BEP20_CONTRACT),['function balanceOf(address) view returns (uint256)','function transfer(address,uint256) returns (bool)'],signer),available=await token.balanceOf(address.address),requested=parseUnits(String(deposit.creditedAmount??deposit.amount),6),amount=available<requested?available:requested;
+    const signer=depositPrivateSigner(address.address,address.hdIndex,provider),token=new Contract(getAddress(process.env.USDT_BEP20_CONTRACT),['function balanceOf(address) view returns (uint256)','function transfer(address,uint256) returns (bool)'],signer),available=await token.balanceOf(address.address),requested=parseUnits(String(deposit.creditedAmount??deposit.amount),USDT_BEP20_DECIMALS),amount=available<requested?available:requested;
     if(amount<=0n)throw Error('Deposit address has no USDT available to sweep');
     if(amount<requested)throw Error('Deposit address USDT balance is below the credited deposit amount');
     const tx=await token.transfer(getAddress(process.env.TREASURY_WALLET_BSC),amount);if(!tx.hash)throw Error('USDT sweep broadcast did not return a transaction hash');
-    Object.assign(sweep,{status:'broadcasted',sweepTxHash:tx.hash,amount:Number(formatUnits(amount,6)),tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),updatedAt:new Date().toISOString(),broadcastAt:new Date().toISOString()});Object.assign(deposit,{sweepStatus:'broadcasted',sweepTxHash:tx.hash});audit(db,'TREASURY_SWEEP_BROADCAST',{sweepId:sweep.id,depositId:deposit.id,txHash:tx.hash,fromAddress:address.address,toAddress:sweep.toAddress,amount:sweep.amount});
+    Object.assign(sweep,{status:'broadcasted',sweepTxHash:tx.hash,amount:Number(formatUnits(amount,USDT_BEP20_DECIMALS)),tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),updatedAt:new Date().toISOString(),broadcastAt:new Date().toISOString()});Object.assign(deposit,{sweepStatus:'broadcasted',sweepTxHash:tx.hash});audit(db,'TREASURY_SWEEP_BROADCAST',{sweepId:sweep.id,depositId:deposit.id,txHash:tx.hash,fromAddress:address.address,toAddress:sweep.toAddress,amount:sweep.amount});
   }catch(error){failSweep(db,sweep,error.message,'broadcast');}
 }
 async function pollSweepWorker(){
@@ -722,4 +766,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
