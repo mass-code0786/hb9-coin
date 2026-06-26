@@ -19,6 +19,7 @@ const TRANSFER_TOPIC = usdtInterface.getEvent('Transfer').topicHash;
 const WATCHER_POLL_MS = Math.max(5000, Number(process.env.DEPOSIT_WATCHER_POLL_MS || 15000));
 let watcherTimer = null;
 let watcherRunning = false;
+let watcherResetApplied = false;
 let sweepTimer = null;
 let sweepRunning = false;
 const HB9_TOTAL_SUPPLY = 1000000;
@@ -374,6 +375,25 @@ function depositAddressServiceStatus(){
   try{HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB).deriveChild(0);return {configured:true};}catch(_){return {configured:false,error:'Deposit address service is not configured'};}
 }
 function positiveEnvNumber(name,defaultValue){const value=Number(process.env[name]??defaultValue);return Number.isFinite(value)&&value>0?value:null;}
+function configuredDepositWatcherStartBlock(value=process.env.DEPOSIT_WATCHER_START_BLOCK){
+  const raw=String(value??'').trim();
+  if(!raw||raw.toLowerCase()==='latest')return null;
+  const block=Number(raw);
+  return Number.isInteger(block)&&block>=0?block:null;
+}
+function resolveDepositWatcherStart({latestBlock,confirmations,state={},startBlock=process.env.DEPOSIT_WATCHER_START_BLOCK,resetCursor=false}){
+  const latest=Math.max(0,Number(latestBlock)), required=Math.max(1,Number(confirmations)||12), configuredStart=configuredDepositWatcherStartBlock(startBlock), defaultStart=Math.max(0,latest-required);
+  if(resetCursor)return {nextBlock:latest,cursorMode:'latest',configuredStartBlock:null,reset:true};
+  const saved=Number(state.lastProcessedBlock);
+  if(configuredStart!==null){
+    const canResume=state.cursorMode==='configured'&&Number(state.configuredStartBlock)===configuredStart&&Number.isInteger(saved)&&saved>=configuredStart;
+    return {nextBlock:canResume?saved+1:configuredStart,cursorMode:'configured',configuredStartBlock:configuredStart,reset:false};
+  }
+  // Legacy/unqualified cursors are deliberately ignored: automatic mode must never
+  // resume an arbitrary historical scan after DEPOSIT_WATCHER_START_BLOCK is removed.
+  const canResume=state.cursorMode==='latest'&&Number.isInteger(saved)&&saved>=defaultStart;
+  return {nextBlock:canResume?saved+1:defaultStart,cursorMode:'latest',configuredStartBlock:null,reset:false};
+}
 function sweepServiceStatus(){
   const missing=[];
   if(process.env.SWEEP_ENABLED!=='true')missing.push('SWEEP_ENABLED=true');
@@ -458,13 +478,30 @@ async function pollDepositWatcher(){
   try{
     const provider=new JsonRpcProvider(process.env.BSC_RPC_URL), latestBlock=await provider.getBlockNumber(), db=readDB();
     db.deposit_watcher=db.deposit_watcher||{};
-    const configuredStart=Number(process.env.DEPOSIT_WATCHER_START_BLOCK), defaultStart=Math.max(0,latestBlock-Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12));
-    const nextBlock=Number.isInteger(db.deposit_watcher.lastScannedBlock)?db.deposit_watcher.lastScannedBlock+1:(Number.isInteger(configuredStart)?configuredStart:defaultStart);
+    const start=resolveDepositWatcherStart({latestBlock,confirmations:process.env.REQUIRED_DEPOSIT_CONFIRMATIONS,state:db.deposit_watcher,resetCursor:process.env.DEPOSIT_WATCHER_RESET_CURSOR==='true'&&!watcherResetApplied});
+    if(start.reset){
+      Object.assign(db.deposit_watcher,{lastProcessedBlock:latestBlock,cursorMode:start.cursorMode,lastCursorResetAt:new Date().toISOString()});
+      delete db.deposit_watcher.lastScannedBlock;
+      delete db.deposit_watcher.configuredStartBlock;
+      writeDB(db);
+      watcherResetApplied=true;
+      console.log(`Deposit watcher starting from block ${latestBlock} to ${latestBlock} (cursor reset)`);
+      return;
+    }
+    const nextBlock=start.nextBlock;
     const range=Math.max(1,Math.min(2000,Number(process.env.DEPOSIT_WATCHER_BLOCK_RANGE||500))), toBlock=Math.min(latestBlock,nextBlock+range-1);
     if(nextBlock<=toBlock){
+      console.log(`Deposit watcher starting from block ${nextBlock} to ${toBlock}`);
       const logs=await provider.getLogs({address:getAddress(process.env.USDT_BEP20_CONTRACT),topics:[TRANSFER_TOPIC],fromBlock:nextBlock,toBlock});
       for(const log of logs){const event=usdtInterface.parseLog(log);if(event)recordBep20Transfer(db,{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:event.args.from,toAddress:event.args.to,amount:Number(formatUnits(event.args.value,6))});}
-      db.deposit_watcher.lastScannedBlock=toBlock;
+      updateDepositConfirmations(db,latestBlock);
+      // Do not advance the cursor until getLogs and event handling have both succeeded.
+      Object.assign(db.deposit_watcher,{lastProcessedBlock:toBlock,cursorMode:start.cursorMode});
+      if(start.configuredStartBlock===null)delete db.deposit_watcher.configuredStartBlock;
+      else db.deposit_watcher.configuredStartBlock=start.configuredStartBlock;
+      delete db.deposit_watcher.lastScannedBlock;
+      writeDB(db);
+      return;
     }
     updateDepositConfirmations(db,latestBlock);writeDB(db);
   }catch(error){console.error('Deposit watcher error:',error.message);}finally{watcherRunning=false;}
@@ -644,4 +681,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,resolveDepositWatcherStart,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};

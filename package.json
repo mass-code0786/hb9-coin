@@ -8,7 +8,8 @@
     "start": "node server.js",
     "seed": "node scripts/seed.js",
     "derive:xpub": "node scripts/derive-xpub.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "smoke:watcher": "node scripts/watcher-smoke.js"
   },
   "engines": {
     "node": ">=18"
