@@ -394,6 +394,23 @@ function resolveDepositWatcherStart({latestBlock,confirmations,state={},startBlo
   const canResume=state.cursorMode==='latest'&&Number.isInteger(saved)&&saved>=defaultStart;
   return {nextBlock:canResume?saved+1:defaultStart,cursorMode:'latest',configuredStartBlock:null,reset:false};
 }
+function watcherLogContext(log){
+  return {transactionHash:typeof log?.transactionHash==='string'?log.transactionHash:null,blockNumber:Number.isInteger(log?.blockNumber)?log.blockNumber:null,logIndex:Number.isInteger(log?.index)?log.index:null};
+}
+function parseBep20TransferWatcherLog(log){
+  if(!log||typeof log!=='object')return {reason:'log is not an object'};
+  if(!Array.isArray(log.topics)||log.topics.length<3)return {reason:'Transfer log must contain at least three topics'};
+  if(String(log.topics[0]).toLowerCase()!==TRANSFER_TOPIC.toLowerCase())return {reason:'topic0 is not the ERC20 Transfer signature'};
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.data||'')))return {reason:'data is not a 32-byte hexadecimal amount'};
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[1]))||!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[2])))return {reason:'from or to topic is not a 32-byte hexadecimal value'};
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.transactionHash||'')))return {reason:'transaction hash is invalid'};
+  if(!Number.isInteger(log.index)||log.index<0)return {reason:'log index is invalid'};
+  if(!Number.isInteger(log.blockNumber)||log.blockNumber<0)return {reason:'block number is invalid'};
+  try{
+    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),6))}};
+  }catch(error){return {reason:`unable to decode Transfer log: ${error.message}`};}
+}
+function warnRejectedDepositWatcherLog(log,reason){console.warn('Deposit watcher rejected log:',{reason,...watcherLogContext(log)});}
 function sweepServiceStatus(){
   const missing=[];
   if(process.env.SWEEP_ENABLED!=='true')missing.push('SWEEP_ENABLED=true');
@@ -493,7 +510,11 @@ async function pollDepositWatcher(){
     if(nextBlock<=toBlock){
       console.log(`Deposit watcher starting from block ${nextBlock} to ${toBlock}`);
       const logs=await provider.getLogs({address:getAddress(process.env.USDT_BEP20_CONTRACT),topics:[TRANSFER_TOPIC],fromBlock:nextBlock,toBlock});
-      for(const log of logs){const event=usdtInterface.parseLog(log);if(event)recordBep20Transfer(db,{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:event.args.from,toAddress:event.args.to,amount:Number(formatUnits(event.args.value,6))});}
+      for(const log of logs){
+        const parsed=parseBep20TransferWatcherLog(log);
+        if(!parsed.event){warnRejectedDepositWatcherLog(log,parsed.reason);continue;}
+        try{recordBep20Transfer(db,parsed.event);}catch(error){warnRejectedDepositWatcherLog(log,`recording event failed: ${error.message}`);}
+      }
       updateDepositConfirmations(db,latestBlock);
       // Do not advance the cursor until getLogs and event handling have both succeeded.
       Object.assign(db.deposit_watcher,{lastProcessedBlock:toBlock,cursorMode:start.cursorMode});
@@ -681,4 +702,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,resolveDepositWatcherStart,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,parseBep20TransferWatcherLog,resolveDepositWatcherStart,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
