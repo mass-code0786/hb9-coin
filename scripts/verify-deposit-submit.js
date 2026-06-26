@@ -134,7 +134,7 @@ async function main() {
     await evaluate(cdp, `localStorage.hb9token=${JSON.stringify(auth.token)};localStorage.hb9user=${JSON.stringify(JSON.stringify(auth.user))};location.reload()`);
     await waitFor('!!document.querySelector("[data-view=\\"Deposit\\"]")', cdp);
     await evaluate(cdp, `document.querySelector('[data-view="Deposit"]').click()`);
-    await waitFor(`document.body.innerText.includes('Your permanent USDT BEP20 address')`, cdp);
+    await waitFor(`!!document.querySelector('[data-copy-deposit-address]')`, cdp);
     const state = await evaluate(cdp, `(() => {
       const address = document.querySelector('[data-copy-deposit-address]')?.dataset.copyDepositAddress;
       return { address, hasManualForm: !!document.querySelector('#deposit'), historyVisible: document.body.innerText.includes('Deposit History') };
