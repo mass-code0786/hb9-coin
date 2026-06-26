@@ -463,16 +463,21 @@ function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress
   if(!Number.isInteger(logIndex)||logIndex<0)failures.push('log index must be a non-negative integer');
   if(!isAddress(toAddress))failures.push('recipient address is invalid');
   if(!isAddress(fromAddress))failures.push('sender address is invalid');
-  if(!Number.isFinite(amount)||amount<=0)failures.push('amount must be a finite value greater than zero');
+  if(!Number.isFinite(amount)||amount<0)failures.push('amount must be a finite value greater than or equal to zero');
   if(!Number.isInteger(blockNumber)||blockNumber<0)failures.push('block number must be a non-negative integer');
   return failures;
 }
+function isZeroValueBep20Transfer(amount){return Number(amount)===0;}
 function recordBep20Transfer(db,input){
   const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=String(input.toAddress||'').trim().toLowerCase(), fromAddress=String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
   const failures=validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber});
   if(failures.length){
     console.warn('Invalid BEP20 transfer event:',{failures,topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
     throw Error('Invalid BEP20 transfer event');
+  }
+  if(isZeroValueBep20Transfer(amount)){
+    console.debug('Skipping zero-value Transfer event',{topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
+    return null;
   }
   const address=(db.deposit_addresses||[]).find(x=>x.chain===chain&&x.address.toLowerCase()===toAddress);
   if(!address)return null;
@@ -717,4 +722,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,parseBep20TransferWatcherLog,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
