@@ -9,5 +9,10 @@
     "seed": "node scripts/seed.js",
     "smoke": "node scripts/smoke.js"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ethers": "^6.17.0"
+  }
 }

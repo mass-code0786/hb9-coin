@@ -145,7 +145,7 @@ Rules:
 - Never reuse an index for a different user.
 - Keep the seed phrase offline from the web app. The web app may store an xpub only if derivation can be done without private-key exposure.
 
-The current dependency-free demo uses deterministic placeholder EVM-style addresses from `HD_WALLET_XPUB`, chain, and index. That is only a local scaffold. Production must replace it with a real audited BIP-32/BIP-44 derivation service.
+The application derives permanent EVM deposit addresses from `HD_WALLET_XPUB` using BIP-32 non-hardened child indexes. Configure the xpub at `m/44'/60'/0'/0` so child index `n` maps to the expected BSC address. A missing or invalid xpub disables address allocation; there is no development-address fallback.
 
 ## Security Considerations
 

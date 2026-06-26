@@ -3,6 +3,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const { HDNodeWallet } = require('ethers');
+const TEST_XPUB = HDNodeWallet.fromPhrase('test test test test test test test test test test test junk').neuter().extendedKey;
 
 const port = 3100 + (process.pid % 500);
 const dataFile = path.join(os.tmpdir(), `hb9-smoke-${process.pid}.json`);
@@ -68,18 +71,25 @@ async function registerUser(name, email, walletAddress, sponsorEmail) {
   return login(email, 'Smoke@123');
 }
 
-async function approveDeposit(adminToken, userId) {
-  const overview = await request('GET', '/api/admin/overview', null, adminToken);
-  const deposit = overview.deposits.find(item => item.userId === userId && item.status === 'pending');
-  assert(deposit, 'Pending deposit must exist');
-  await request('POST', `/api/admin/deposits/${deposit.id}/approve`, null, adminToken);
-}
-
 async function depositConvertAndStake(token, adminToken, userId, expectedActiveHb9 = STAKE_HB9) {
-  await request('POST', '/api/deposits', { amount: 100 }, token);
-  await approveDeposit(adminToken, userId);
+  let manualDisabled=false;
+  try{await request('POST','/api/deposits',{amount:100},token);}catch(error){manualDisabled=error.status===410;}
+  assert(manualDisabled,'Manual deposit API must be disabled');
+  const addressResponse = await request('GET', '/api/deposit-address', null, token);
+  const txHash = `0x${crypto.createHash('sha256').update(`${userId}:${Date.now()}`).digest('hex')}`;
+  const event = {chain:'BSC',txHash,logIndex:0,fromAddress:'0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',toAddress:addressResponse.depositAddress.address,amount:100,blockNumber:100,currentBlock:100};
+  const pending = await request('POST', '/api/internal/deposit-events', event, token);
+  assert(pending.deposit.status === 'pending' && pending.deposit.confirmations === 1, 'Detected transfer must wait for confirmations');
+  const pendingDashboard = await request('GET', '/api/dashboard', null, token);
+  assert(pendingDashboard.wallets.usdt === 0, 'Pending transfer must not credit the USDT wallet');
+  const credited = await request('POST', '/api/internal/deposit-events', {...event,currentBlock:111}, token);
+  assert(credited.deposit.status === 'credited', 'Confirmed transfer must credit automatically');
+  await request('POST', '/api/internal/deposit-events', {...event,currentBlock:120}, token);
   const approved = await request('GET', '/api/dashboard', null, token);
-  assert(approved.wallets.usdt === 100 && approved.wallets.hb9 === 0, 'Deposit approval must credit USDT only');
+  assert(approved.wallets.usdt === 100 && approved.wallets.hb9 === 0, 'Confirmed deposit must credit USDT exactly once');
+  const overview = await request('GET', '/api/admin/overview', null, adminToken);
+  const credits=overview.walletLedger.filter(item => item.userId === userId && item.reason === 'BEP20 deposit credited' && item.refId === `BSC:${txHash}:0`);
+  assert(credits.length === 1, `Confirmed transfer must create one immutable USDT wallet ledger credit; found ${credits.length}`);
   await request('POST', '/api/convert', { amount: 100 }, token);
   const converted = await request('GET', '/api/dashboard', null, token);
   assert(converted.wallets.usdt === 0 && converted.wallets.hb9 === STAKE_HB9, `Conversion must credit ${STAKE_HB9} HB9`);
@@ -183,7 +193,7 @@ async function main() {
     fs.rmSync(dataFile, { force: true });
     const server = spawn(process.execPath, ['server.js'], {
       cwd: path.join(__dirname, '..'),
-      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true' },
+      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, DEPOSIT_WATCHER_TEST_MODE: 'true' },
       stdio: 'ignore'
     });
 
@@ -334,24 +344,19 @@ async function main() {
       const firstAddress = (await request('GET', '/api/deposit-address?chain=BSC', null, hdToken)).depositAddress;
       const secondAddress = (await request('GET', '/api/deposit-address?chain=BSC', null, hdToken)).depositAddress;
       assert(firstAddress.address === secondAddress.address && firstAddress.hdIndex === secondAddress.hdIndex, 'Deposit address must be permanent and reused');
-      const txHash = `0x${'d'.repeat(64)}`;
-      let watched = await request('POST', '/api/admin/blockchain/transactions', { chain: 'BSC', txHash, toAddress: firstAddress.address, amount: 25, confirmations: 1, blockNumber: 100 }, admin);
+      const txHash = `0x${'d'.repeat(64)}`, event = {chain:'BSC',txHash,logIndex:3,fromAddress:'0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',toAddress:firstAddress.address,amount:25,blockNumber:100,currentBlock:100};
+      let watched = await request('POST', '/api/internal/deposit-events', event, hdToken);
       assert(watched.deposit.status === 'pending', 'Blockchain deposit must wait for confirmations');
-      watched = await request('POST', '/api/admin/blockchain/transactions', { chain: 'BSC', txHash, toAddress: firstAddress.address, amount: 25, confirmations: 12, blockNumber: 100 }, admin);
+      watched = await request('POST', '/api/internal/deposit-events', {...event,currentBlock:111}, hdToken);
       assert(watched.deposit.status === 'credited', 'Blockchain deposit must credit after required confirmations');
-      assert(watched.deposit.sweepTxHash && watched.deposit.treasuryDestination === '0x9999999999999999999999999999999999999999', 'Credited deposit must record sweep tx and treasury destination');
       let hdDash = await request('GET', '/api/dashboard', null, hdToken);
       assert(hdDash.wallets.usdt === 25, 'Credited blockchain deposit must increase USDT wallet');
-      await request('POST', '/api/admin/blockchain/transactions', { chain: 'BSC', txHash, toAddress: firstAddress.address, amount: 25, confirmations: 20, blockNumber: 100 }, admin);
+      await request('POST', '/api/internal/deposit-events', {...event,currentBlock:120}, hdToken);
       hdDash = await request('GET', '/api/dashboard', null, hdToken);
-      assert(hdDash.wallets.usdt === 25, 'Duplicate transaction hash must not credit twice');
-      const sweepRun = await request('POST', '/api/admin/sweeps/run', null, admin);
-      assert(sweepRun.summary.sweepsCreated === 0, 'Sweep job must not create duplicate sweeps');
+      assert(hdDash.wallets.usdt === 25, 'Duplicate transaction/log index must not credit twice');
       const byTx = await request('GET', `/api/admin/deposits/search?q=${txHash}`, null, admin);
       const byAddress = await request('GET', `/api/admin/deposits/search?q=${firstAddress.address}`, null, admin);
-      const bySweep = await request('GET', `/api/admin/sweeps?q=${watched.deposit.sweepTxHash}`, null, admin);
       assert(byTx.deposits.length === 1 && byAddress.deposits.length === 1, 'Admin deposit search must find tx hash and address');
-      assert(bySweep.sweeps.length === 1 && bySweep.sweeps[0].creditedAmount === 25, 'Admin sweep search must find treasury transfer and credited amount');
 
       await request('PUT', '/api/admin/reserve-wallets', { asset: 'HB9', walletType: 'income', balance: 500 }, admin);
       let zeroReceiver;
@@ -477,7 +482,7 @@ async function main() {
 
       const resetResult = await request('POST', '/api/admin/demo/reset', null, admin).catch(error => error);
       assert(resetResult.status === 404 && resetResult.body?.error === 'Route not found', 'Demo reset route must be removed');
-      console.log('SMOKE PASS: HB9 fixed supply, reserve accounting, sell burn, queued income, one-time level income unlocks, token economy, admin price engine, USDT-only withdrawals, partial B1 qualification, full B1 qualification, permanent flush burn, HD deposit address reuse, blockchain tx idempotency, auto sweep idempotency, duplicate guard, ledger immutability, exchange, and removed demo reset.');
+      console.log('SMOKE PASS: HD xpub address reuse, simulated BEP20 confirmation credit, tx/log-index idempotency, manual deposit API removal, wallet ledger credit, and existing HB9 financial flows.');
     } finally {
       server?.kill();
       fs.rmSync(dataFile, { force: true });
