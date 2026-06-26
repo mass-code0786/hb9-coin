@@ -5,7 +5,9 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { HDNodeWallet } = require('ethers');
-const TEST_XPUB = HDNodeWallet.fromPhrase('test test test test test test test test test test test junk').neuter().extendedKey;
+const TEST_MNEMONIC = 'test test test test test test test test test test test junk';
+const TEST_HD_PATH = "m/44'/60'/0'/0";
+const TEST_XPUB = HDNodeWallet.fromPhrase(TEST_MNEMONIC, '', TEST_HD_PATH).neuter().extendedKey;
 
 const port = 3100 + (process.pid % 500);
 const dataFile = path.join(os.tmpdir(), `hb9-smoke-${process.pid}.json`);
@@ -193,7 +195,7 @@ async function main() {
     fs.rmSync(dataFile, { force: true });
     const server = spawn(process.execPath, ['server.js'], {
       cwd: path.join(__dirname, '..'),
-      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, DEPOSIT_WATCHER_TEST_MODE: 'true' },
+      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, HD_WALLET_MNEMONIC: TEST_MNEMONIC, HD_WALLET_DERIVATION_PATH: TEST_HD_PATH, DEPOSIT_WATCHER_TEST_MODE: 'true' },
       stdio: 'ignore'
     });
 

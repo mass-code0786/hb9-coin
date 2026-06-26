@@ -13,6 +13,7 @@ const PRODUCTION_DOMAIN = /^https:\/\/coin\.hb9\.live\/?$/i.test(APP_URL);
 const DEV_ONLY_DEMO = process.env.NODE_ENV !== 'production' && process.env.DEMO_MODE === 'true';
 const DEMO_MODE = DEV_ONLY_DEMO;
 const BSC_CHAIN = 'BSC';
+const DEFAULT_HD_DERIVATION_PATH = "m/44'/60'/0'/0";
 const USDT_BEP20_DECIMALS = 18;
 const RAW_USDT_MIGRATION_THRESHOLD = 1000000000;
 const USDT_BEP20_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
@@ -362,6 +363,27 @@ function deterministicInt(seed, min, max) {
 function audit(db,type,details){db.auditLogs=db.auditLogs||[];db.auditLogs.push({id:id('aud'),type,details,createdAt:new Date().toISOString()});}
 function normalizeChain(chain){return String(chain||'BSC').trim().toUpperCase();}
 function nextHdIndex(db,chain){return (db.deposit_addresses||[]).filter(x=>x.chain===chain).reduce((max,x)=>Math.max(max,Number(x.hdIndex)||0),-1)+1;}
+function hdBaseDerivationPath(){return String(process.env.HD_WALLET_DERIVATION_PATH||DEFAULT_HD_DERIVATION_PATH).trim()||DEFAULT_HD_DERIVATION_PATH;}
+function depositDerivationPath(index,basePath=hdBaseDerivationPath()){return `${basePath}/${Number(index)}`;}
+function hdFingerprint(value=process.env.HD_WALLET_XPUB||''){return value?crypto.createHash('sha256').update(String(value)).digest('hex').slice(0,16):null;}
+function configuredDepositXpub(){return HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB);}
+function configuredHdSignerSource(){return process.env.HD_WALLET_MNEMONIC?'HD_WALLET_MNEMONIC':process.env.HD_WALLET_XPRV?'HD_WALLET_XPRV':null;}
+function expectedXpubFromSigner(){
+  if(process.env.HD_WALLET_MNEMONIC)return HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',hdBaseDerivationPath()).neuter().extendedKey;
+  if(process.env.HD_WALLET_XPRV)return HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPRV).neuter().extendedKey;
+  return null;
+}
+function hdWalletConsistencyStatus(){
+  if(!process.env.HD_WALLET_XPUB)return {configured:false,error:'HD_WALLET_XPUB is not configured'};
+  try{configuredDepositXpub().deriveChild(0);}catch(error){return {configured:false,error:`HD_WALLET_XPUB is invalid: ${error.message}`};}
+  if(configuredHdSignerSource()){
+    try{
+      const expected=expectedXpubFromSigner();
+      if(expected!==process.env.HD_WALLET_XPUB)return {configured:false,error:`HD_WALLET_XPUB does not match ${configuredHdSignerSource()} at HD_WALLET_DERIVATION_PATH`,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:configuredHdSignerSource()};
+    }catch(error){return {configured:false,error:`${configuredHdSignerSource()} or HD_WALLET_DERIVATION_PATH is invalid: ${error.message}`};}
+  }
+  return {configured:true,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:configuredHdSignerSource()};
+}
 function depositServiceStatus(){
   const missing=[];
   if(!depositAddressServiceStatus().configured)missing.push('HD_WALLET_XPUB');
@@ -373,8 +395,9 @@ function depositServiceStatus(){
   return {configured:missing.length===0,watcherEnabled:process.env.DEPOSIT_WATCHER_ENABLED==='true',missing,message:missing.length?'Automatic deposit service is not configured yet.':'Automatic deposit monitoring is active.'};
 }
 function depositAddressServiceStatus(){
-  if(!process.env.HD_WALLET_XPUB)return {configured:false,error:'Deposit address service is not configured'};
-  try{HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB).deriveChild(0);return {configured:true};}catch(_){return {configured:false,error:'Deposit address service is not configured'};}
+  const status=hdWalletConsistencyStatus();
+  if(status.configured&&!configuredHdSignerSource())return {configured:false,error:'HD_WALLET_MNEMONIC or HD_WALLET_XPRV is required so generated deposit addresses are sweepable'};
+  return status.configured?status:{configured:false,error:status.error||'Deposit address service is not configured'};
 }
 function positiveEnvNumber(name,defaultValue){const value=Number(process.env[name]??defaultValue);return Number.isFinite(value)&&value>0?value:null;}
 function configuredDepositWatcherStartBlock(value=process.env.DEPOSIT_WATCHER_START_BLOCK){
@@ -419,32 +442,49 @@ function sweepServiceStatus(){
   if(!process.env.BSC_RPC_URL)missing.push('BSC_RPC_URL');
   if(!isAddress(process.env.USDT_BEP20_CONTRACT||''))missing.push('USDT_BEP20_CONTRACT');
   if(!isAddress(process.env.TREASURY_WALLET_BSC||''))missing.push('TREASURY_WALLET_BSC');
-  if(!process.env.HD_WALLET_MNEMONIC)missing.push('HD_WALLET_MNEMONIC');
-  if(!process.env.SWEEP_SIGNER_PRIVATE_KEY)missing.push('SWEEP_SIGNER_PRIVATE_KEY');
+  if(!configuredHdSignerSource())missing.push('HD_WALLET_MNEMONIC or HD_WALLET_XPRV');
   if(!process.env.GAS_WALLET_PRIVATE_KEY)missing.push('GAS_WALLET_PRIVATE_KEY');
   if(!positiveEnvNumber('MIN_SWEEP_USDT',1))missing.push('MIN_SWEEP_USDT');
   if(!positiveEnvNumber('SWEEP_POLL_MS',60000))missing.push('SWEEP_POLL_MS');
   if(!positiveEnvNumber('SWEEP_CONFIRMATIONS',12))missing.push('SWEEP_CONFIRMATIONS');
   if(!positiveEnvNumber('GAS_TOPUP_BNB_AMOUNT'))missing.push('GAS_TOPUP_BNB_AMOUNT');
   if(!positiveEnvNumber('MIN_DEPOSIT_ADDRESS_BNB'))missing.push('MIN_DEPOSIT_ADDRESS_BNB');
-  try{if(process.env.SWEEP_SIGNER_PRIVATE_KEY)new Wallet(process.env.SWEEP_SIGNER_PRIVATE_KEY);if(process.env.GAS_WALLET_PRIVATE_KEY)new Wallet(process.env.GAS_WALLET_PRIVATE_KEY);}catch(_){missing.push('valid sweep signer private keys');}
+  const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)missing.push(hdStatus.error||'valid HD wallet signer configuration');
+  try{if(process.env.GAS_WALLET_PRIVATE_KEY)new Wallet(process.env.GAS_WALLET_PRIVATE_KEY);}catch(_){missing.push('valid gas wallet private key');}
   return {configured:missing.length===0,enabled:process.env.SWEEP_ENABLED==='true',missing,message:missing.length?'Treasury sweep service is not configured yet.':'Treasury sweep service is active.'};
 }
-function depositPrivateSigner(address,hdIndex,provider){
-  const expected=getAddress(address);
+function depositSignerDiagnostics(addressRecord,provider=null){
+  const expected=getAddress(addressRecord.address),walletIndex=Number(addressRecord.hdIndex),basePath=addressRecord.hdBasePath||hdBaseDerivationPath(),depositPath=addressRecord.derivationPath||depositDerivationPath(walletIndex,basePath),diagnostics={expectedDepositAddress:expected,derivedSignerAddress:null,depositDerivationPath:addressRecord.derivationPath||depositPath,sweepDerivationPath:depositPath,walletIndex,hdFingerprint:addressRecord.hdFingerprint||hdFingerprint(),hdSignerSource:configuredHdSignerSource(),reason:null};
   if(process.env.HD_WALLET_MNEMONIC){
-    const path=process.env.HD_WALLET_DERIVATION_PATH||"m/44'/60'/0'/0";
-    const signer=HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',path).deriveChild(Number(hdIndex)).connect(provider);
-    if(signer.address===expected)return signer;
+    try{
+      const signer=HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',depositPath);
+      diagnostics.derivedSignerAddress=getAddress(signer.address);
+      diagnostics.reason=diagnostics.derivedSignerAddress===expected?'match':'derived signer address does not match expected deposit address';
+      return {diagnostics,signer:provider?signer.connect(provider):signer};
+    }catch(error){diagnostics.reason=`unable to derive signer: ${error.message}`;return {diagnostics,signer:null};}
   }
-  if(process.env.SWEEP_SIGNER_PRIVATE_KEY){const signer=new Wallet(process.env.SWEEP_SIGNER_PRIVATE_KEY,provider);if(signer.address===expected)return signer;}
-  throw Error('No server-side signer controls this deposit address');
+  if(process.env.HD_WALLET_XPRV){
+    try{
+      const signer=HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPRV).deriveChild(walletIndex);
+      diagnostics.derivedSignerAddress=getAddress(signer.address);
+      diagnostics.reason=diagnostics.derivedSignerAddress===expected?'match':'derived signer address does not match expected deposit address';
+      return {diagnostics,signer:provider?signer.connect(provider):signer};
+    }catch(error){diagnostics.reason=`unable to derive signer from HD_WALLET_XPRV: ${error.message}`;return {diagnostics,signer:null};}
+  }
+  diagnostics.reason='HD_WALLET_MNEMONIC or HD_WALLET_XPRV is not configured';
+  return {diagnostics,signer:null};
+}
+function depositPrivateSigner(addressRecord,provider){
+  const {diagnostics,signer}=depositSignerDiagnostics(typeof addressRecord==='string'?{address:addressRecord,hdIndex:arguments[1]}:addressRecord,provider);
+  if(signer&&diagnostics.derivedSignerAddress===diagnostics.expectedDepositAddress)return signer;
+  console.warn('TREASURY_SWEEP_SIGNER_DIAGNOSTIC',diagnostics);
+  throw Error(`No server-side signer controls this deposit address: ${diagnostics.reason}`);
 }
 function derivedDepositAddress(chain,index){
   if(normalizeChain(chain)!==BSC_CHAIN)throw Error('Unsupported deposit chain');
   const status=depositAddressServiceStatus();
   if(!status.configured)throw Error(status.error);
-  return getAddress(HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB).deriveChild(index).address);
+  return getAddress(configuredDepositXpub().deriveChild(index).address);
 }
 function ensureDepositAddress(db,userId,chainInput='BSC'){
   const chain=normalizeChain(chainInput);
@@ -452,7 +492,7 @@ function ensureDepositAddress(db,userId,chainInput='BSC'){
   const existing=db.deposit_addresses.find(x=>x.userId===userId&&x.chain===chain);
   if(existing)return existing;
   const hdIndex=nextHdIndex(db,chain), createdAt=new Date().toISOString();
-  const record={id:id('addr'),userId,chain,address:derivedDepositAddress(chain,hdIndex),hdIndex,createdAt};
+  const basePath=hdBaseDerivationPath(),record={id:id('addr'),userId,chain,address:derivedDepositAddress(chain,hdIndex),hdIndex,hdBasePath:basePath,derivationPath:depositDerivationPath(hdIndex,basePath),hdFingerprint:hdFingerprint(),createdAt};
   if(db.deposit_addresses.some(x=>x.chain===chain&&x.address.toLowerCase()===record.address.toLowerCase()))throw Error('Derived deposit address collision');
   db.deposit_addresses.push(record);
   audit(db,'DEPOSIT_ADDRESS_CREATED',{userId,chain,address:record.address,hdIndex});
@@ -647,7 +687,7 @@ async function executeSweep(db,sweep,provider){
       if(!sweep.gasTopupTxHash){const gasWallet=new Wallet(process.env.GAS_WALLET_PRIVATE_KEY,provider),tx=await gasWallet.sendTransaction({to:address.address,value:topup});if(!tx.hash)throw Error('Gas top-up broadcast did not return a transaction hash');Object.assign(sweep,{status:'gas_topup_broadcasted',gasTopupStatus:'broadcasted',gasTopupTxHash:tx.hash,gasTopupFrom:gasWallet.address,updatedAt:new Date().toISOString()});deposit.sweepStatus='gas_topup_broadcasted';emitSweepLog(db,'TREASURY_SWEEP_GAS_TOPUP_BROADCAST',{sweepId:sweep.id,txHash:tx.hash,toAddress:address.address,amountBnb:String(topup)});}return;
     }
     sweep.gasTopupStatus=sweep.gasTopupStatus==='not_required'?'available':sweep.gasTopupStatus;
-    const signer=depositPrivateSigner(address.address,address.hdIndex,provider),token=new Contract(getAddress(process.env.USDT_BEP20_CONTRACT),['function balanceOf(address) view returns (uint256)','function transfer(address,uint256) returns (bool)'],signer),available=await token.balanceOf(address.address),requested=parseUnits(String(deposit.creditedAmount??deposit.amount),USDT_BEP20_DECIMALS),amount=available<requested?available:requested;
+    const signer=depositPrivateSigner(address,provider),token=new Contract(getAddress(process.env.USDT_BEP20_CONTRACT),['function balanceOf(address) view returns (uint256)','function transfer(address,uint256) returns (bool)'],signer),available=await token.balanceOf(address.address),requested=parseUnits(String(deposit.creditedAmount??deposit.amount),USDT_BEP20_DECIMALS),amount=available<requested?available:requested;
     if(amount<=0n)throw Error('Deposit address has no USDT available to sweep');
     if(amount<requested)throw Error('Deposit address USDT balance is below the credited deposit amount');
     const tx=await token.transfer(getAddress(process.env.TREASURY_WALLET_BSC),amount);if(!tx.hash)throw Error('USDT sweep broadcast did not return a transaction hash');
@@ -781,4 +821,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
