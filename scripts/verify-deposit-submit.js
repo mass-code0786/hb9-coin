@@ -8,7 +8,7 @@ const { HDNodeWallet } = require('ethers');
 const port = 3500 + (process.pid % 300);
 const debugPort = 9700 + (process.pid % 200);
 const dataFile = path.join(os.tmpdir(), `hb9-deposit-submit-${process.pid}.json`);
-const screenshotFile = path.join(__dirname, '..', 'artifacts', 'deposit-address-ready.png');
+const screenshotFile = path.join(__dirname, '..', 'artifacts', 'treasury-sweep-monitor.png');
 const TEST_XPUB = HDNodeWallet.fromPhrase('test test test test test test test test test test test junk').neuter().extendedKey;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -142,6 +142,13 @@ async function main() {
     if (!/^0x[a-fA-F0-9]{40}$/.test(state.address || '') || state.hasManualForm || !state.historyVisible) throw Error(`Unexpected Deposit UI state: ${JSON.stringify(state)}`);
     const dashboard = await request('GET', '/api/dashboard', null, auth.token);
     if (!dashboard.depositService.configured || dashboard.wallets.usdt !== 0) throw Error('Dashboard did not expose a configured automatic deposit service');
+    const admin = await request('POST', '/api/auth/login', { email: 'admin@hb9.local', password: 'Admin@123' });
+    await evaluate(cdp, `localStorage.hb9token=${JSON.stringify(admin.token)};localStorage.hb9user=${JSON.stringify(JSON.stringify(admin.user))};location.reload()`);
+    await waitFor('!!document.querySelector("[data-view=\\"Admin\\"]")', cdp);
+    await evaluate(cdp, `document.querySelector('[data-view="Admin"]').click()`);
+    await waitFor('!!document.querySelector("[data-tab=\\"Treasury Sweeps\\"]")', cdp);
+    await evaluate(cdp, `document.querySelector('[data-tab="Treasury Sweeps"]').click()`);
+    await waitFor(`document.body.innerText.includes('Treasury Sweep Monitor')`, cdp);
     fs.mkdirSync(path.dirname(screenshotFile), { recursive: true });
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true, captureBeyondViewport: true });
     fs.writeFileSync(screenshotFile, Buffer.from(shot.data, 'base64'));
