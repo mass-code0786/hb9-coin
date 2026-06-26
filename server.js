@@ -593,19 +593,34 @@ async function pollDepositWatcher(){
 }
 function startDepositWatcher(){if(process.env.DEPOSIT_WATCHER_ENABLED==='true'){pollDepositWatcher();watcherTimer=setInterval(pollDepositWatcher,WATCHER_POLL_MS);}}
 function sweepRecordForDeposit(db,depositId){return (db.sweep_transactions||[]).find(item=>item.depositId===depositId);}
+function emitSweepLog(db,type,details){console.log(type,details);audit(db,type,details);}
 function createSweepCandidates(db){
   const minimum=positiveEnvNumber('MIN_SWEEP_USDT',1),now=new Date().toISOString();db.sweep_transactions=db.sweep_transactions||[];
   for(const deposit of db.deposits||[]){
-    if(deposit.status!=='credited'||Number(deposit.creditedAmount??deposit.amount)<minimum||sweepRecordForDeposit(db,deposit.id))continue;
+    const amount=Number(deposit.creditedAmount??deposit.amount),existing=sweepRecordForDeposit(db,deposit.id);
+    if(deposit.status!=='credited'||amount<minimum)continue;
+    if(existing){
+      if(!deposit.sweepStatus)Object.assign(deposit,{sweepStatus:existing.status||'not_started',sweepId:existing.id});
+      const shouldRequeue=existing.status==='failed_retryable'&&(!deposit.sweepStatus||['not_started','failed_retryable'].includes(deposit.sweepStatus));
+      if(shouldRequeue){
+        const address=(db.deposit_addresses||[]).find(item=>item.id===deposit.depositAddressId);
+        if(existing.sweepTxHash)(existing.failedSweepTxHashes||=[]).push(existing.sweepTxHash);
+        if(existing.gasTopupTxHash)(existing.failedGasTopupTxHashes||=[]).push(existing.gasTopupTxHash);
+        Object.assign(existing,{status:'not_started',amount,fromAddress:existing.fromAddress||address?.address,toAddress:existing.toAddress||getAddress(process.env.TREASURY_WALLET_BSC),gasTopupStatus:'not_required',sweepTxHash:null,gasTopupTxHash:null,failureReason:null,failedPhase:null,retryRequestedAt:now,updatedAt:now});
+        Object.assign(deposit,{sweepStatus:'not_started',sweepId:existing.id});
+        emitSweepLog(db,'TREASURY_SWEEP_CANDIDATE_CREATED',{depositId:deposit.id,sweepId:existing.id,amount:existing.amount,fromAddress:existing.fromAddress,toAddress:existing.toAddress,requeued:true});
+      }
+      continue;
+    }
     const address=(db.deposit_addresses||[]).find(item=>item.id===deposit.depositAddressId);if(!address)continue;
-    const sweep={id:id('swp'),depositId:deposit.id,userId:deposit.userId,chain:BSC_CHAIN,depositTxHash:deposit.txHash,depositLogIndex:deposit.logIndex,fromAddress:address.address,toAddress:getAddress(process.env.TREASURY_WALLET_BSC),amount:Number(deposit.creditedAmount??deposit.amount),status:'not_started',gasTopupStatus:'not_required',createdAt:now,updatedAt:now};
-    db.sweep_transactions.push(sweep);Object.assign(deposit,{sweepStatus:'not_started',sweepId:sweep.id});audit(db,'TREASURY_SWEEP_CANDIDATE',{depositId:deposit.id,sweepId:sweep.id,amount:sweep.amount,fromAddress:sweep.fromAddress,toAddress:sweep.toAddress});
+    const sweep={id:id('swp'),depositId:deposit.id,userId:deposit.userId,chain:BSC_CHAIN,depositTxHash:deposit.txHash,depositLogIndex:deposit.logIndex,fromAddress:address.address,toAddress:getAddress(process.env.TREASURY_WALLET_BSC),amount,status:'not_started',gasTopupStatus:'not_required',createdAt:now,updatedAt:now};
+    db.sweep_transactions.push(sweep);Object.assign(deposit,{sweepStatus:'not_started',sweepId:sweep.id});emitSweepLog(db,'TREASURY_SWEEP_CANDIDATE_CREATED',{depositId:deposit.id,sweepId:sweep.id,amount:sweep.amount,fromAddress:sweep.fromAddress,toAddress:sweep.toAddress,requeued:false});
   }
 }
 function sweepConfirmations(receipt,latestBlock){return receipt?Math.max(0,Number(latestBlock)-Number(receipt.blockNumber)+1):0;}
 function failSweep(db,sweep,reason,phase){
   const now=new Date().toISOString();sweep.status='failed_retryable';sweep.failureReason=String(reason||'Sweep transaction failed');sweep.failedPhase=phase;sweep.failedAt=now;sweep.updatedAt=now;
-  const deposit=(db.deposits||[]).find(item=>item.id===sweep.depositId);if(deposit)deposit.sweepStatus='failed_retryable';audit(db,'TREASURY_SWEEP_FAILED',{sweepId:sweep.id,depositId:sweep.depositId,phase,reason:sweep.failureReason});
+  const deposit=(db.deposits||[]).find(item=>item.id===sweep.depositId);if(deposit)deposit.sweepStatus='failed_retryable';emitSweepLog(db,'TREASURY_SWEEP_FAILED',{sweepId:sweep.id,depositId:sweep.depositId,phase,reason:sweep.failureReason});
 }
 async function updateBroadcastedSweep(db,sweep,provider,latestBlock){
   const confirmationsRequired=Number(process.env.SWEEP_CONFIRMATIONS||12);
@@ -613,7 +628,7 @@ async function updateBroadcastedSweep(db,sweep,provider,latestBlock){
     const receipt=await provider.getTransactionReceipt(sweep.gasTopupTxHash);if(!receipt)return false;
     if(Number(receipt.status)!==1){failSweep(db,sweep,'Gas top-up reverted','gas_topup');return true;}
     sweep.gasTopupConfirmations=sweepConfirmations(receipt,latestBlock);if(sweep.gasTopupConfirmations<confirmationsRequired)return false;
-    sweep.gasTopupStatus='confirmed';sweep.status='gas_funded';sweep.gasFundedAt=new Date().toISOString();sweep.updatedAt=sweep.gasFundedAt;audit(db,'TREASURY_SWEEP_GAS_FUNDED',{sweepId:sweep.id,gasTopupTxHash:sweep.gasTopupTxHash});
+    sweep.gasTopupStatus='confirmed';sweep.status='gas_funded';sweep.gasFundedAt=new Date().toISOString();sweep.updatedAt=sweep.gasFundedAt;emitSweepLog(db,'TREASURY_SWEEP_GAS_FUNDED',{sweepId:sweep.id,gasTopupTxHash:sweep.gasTopupTxHash});
   }
   if(!sweep.sweepTxHash||sweep.status!=='broadcasted')return false;
   const receipt=await provider.getTransactionReceipt(sweep.sweepTxHash);if(!receipt)return false;
@@ -621,7 +636,7 @@ async function updateBroadcastedSweep(db,sweep,provider,latestBlock){
   sweep.confirmations=sweepConfirmations(receipt,latestBlock);if(sweep.confirmations<confirmationsRequired)return false;
   const now=new Date().toISOString();sweep.status='confirmed';sweep.sweptAt=now;sweep.updatedAt=now;
   const deposit=(db.deposits||[]).find(item=>item.id===sweep.depositId);if(deposit)Object.assign(deposit,{sweepStatus:'confirmed',sweptAt:now,sweepTxHash:sweep.sweepTxHash});
-  reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:sweep.amount,reason:'BEP20 treasury sweep confirmed',refId:sweep.id,userId:sweep.userId});audit(db,'TREASURY_SWEEP_CONFIRMED',{sweepId:sweep.id,depositId:sweep.depositId,sweepTxHash:sweep.sweepTxHash,amount:sweep.amount,toAddress:sweep.toAddress});return true;
+  reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:sweep.amount,reason:'BEP20 treasury sweep confirmed',refId:sweep.id,userId:sweep.userId});emitSweepLog(db,'TREASURY_SWEEP_CONFIRMED',{sweepId:sweep.id,depositId:sweep.depositId,sweepTxHash:sweep.sweepTxHash,amount:sweep.amount,toAddress:sweep.toAddress});return true;
 }
 async function executeSweep(db,sweep,provider){
   if(sweep.sweepTxHash||sweep.status==='confirmed'||sweep.status==='failed_retryable')return;
@@ -629,14 +644,14 @@ async function executeSweep(db,sweep,provider){
   try{
     const minimum=parseEther(String(positiveEnvNumber('MIN_DEPOSIT_ADDRESS_BNB'))),topup=parseEther(String(positiveEnvNumber('GAS_TOPUP_BNB_AMOUNT'))),bnbBalance=await provider.getBalance(address.address);
     if(bnbBalance<minimum){
-      if(!sweep.gasTopupTxHash){const gasWallet=new Wallet(process.env.GAS_WALLET_PRIVATE_KEY,provider),tx=await gasWallet.sendTransaction({to:address.address,value:topup});if(!tx.hash)throw Error('Gas top-up broadcast did not return a transaction hash');Object.assign(sweep,{status:'gas_topup_broadcasted',gasTopupStatus:'broadcasted',gasTopupTxHash:tx.hash,gasTopupFrom:gasWallet.address,updatedAt:new Date().toISOString()});deposit.sweepStatus='gas_topup_broadcasted';audit(db,'TREASURY_SWEEP_GAS_TOPUP_BROADCAST',{sweepId:sweep.id,txHash:tx.hash,toAddress:address.address,amountBnb:String(topup)});}return;
+      if(!sweep.gasTopupTxHash){const gasWallet=new Wallet(process.env.GAS_WALLET_PRIVATE_KEY,provider),tx=await gasWallet.sendTransaction({to:address.address,value:topup});if(!tx.hash)throw Error('Gas top-up broadcast did not return a transaction hash');Object.assign(sweep,{status:'gas_topup_broadcasted',gasTopupStatus:'broadcasted',gasTopupTxHash:tx.hash,gasTopupFrom:gasWallet.address,updatedAt:new Date().toISOString()});deposit.sweepStatus='gas_topup_broadcasted';emitSweepLog(db,'TREASURY_SWEEP_GAS_TOPUP_BROADCAST',{sweepId:sweep.id,txHash:tx.hash,toAddress:address.address,amountBnb:String(topup)});}return;
     }
     sweep.gasTopupStatus=sweep.gasTopupStatus==='not_required'?'available':sweep.gasTopupStatus;
     const signer=depositPrivateSigner(address.address,address.hdIndex,provider),token=new Contract(getAddress(process.env.USDT_BEP20_CONTRACT),['function balanceOf(address) view returns (uint256)','function transfer(address,uint256) returns (bool)'],signer),available=await token.balanceOf(address.address),requested=parseUnits(String(deposit.creditedAmount??deposit.amount),USDT_BEP20_DECIMALS),amount=available<requested?available:requested;
     if(amount<=0n)throw Error('Deposit address has no USDT available to sweep');
     if(amount<requested)throw Error('Deposit address USDT balance is below the credited deposit amount');
     const tx=await token.transfer(getAddress(process.env.TREASURY_WALLET_BSC),amount);if(!tx.hash)throw Error('USDT sweep broadcast did not return a transaction hash');
-    Object.assign(sweep,{status:'broadcasted',sweepTxHash:tx.hash,amount:Number(formatUnits(amount,USDT_BEP20_DECIMALS)),tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),updatedAt:new Date().toISOString(),broadcastAt:new Date().toISOString()});Object.assign(deposit,{sweepStatus:'broadcasted',sweepTxHash:tx.hash});audit(db,'TREASURY_SWEEP_BROADCAST',{sweepId:sweep.id,depositId:deposit.id,txHash:tx.hash,fromAddress:address.address,toAddress:sweep.toAddress,amount:sweep.amount});
+    Object.assign(sweep,{status:'broadcasted',sweepTxHash:tx.hash,amount:Number(formatUnits(amount,USDT_BEP20_DECIMALS)),tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),updatedAt:new Date().toISOString(),broadcastAt:new Date().toISOString()});Object.assign(deposit,{sweepStatus:'broadcasted',sweepTxHash:tx.hash});emitSweepLog(db,'TREASURY_SWEEP_BROADCAST',{sweepId:sweep.id,depositId:deposit.id,txHash:tx.hash,fromAddress:address.address,toAddress:sweep.toAddress,amount:sweep.amount});
   }catch(error){failSweep(db,sweep,error.message,'broadcast');}
 }
 async function pollSweepWorker(){

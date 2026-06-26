@@ -1,6 +1,6 @@
 const assert = (condition,message) => { if(!condition)throw Error(message); };
 process.env.TREASURY_WALLET_BSC='0x9999999999999999999999999999999999999999';
-process.env.MIN_SWEEP_USDT='1';
+process.env.MIN_SWEEP_USDT='0.1';
 process.env.SWEEP_CONFIRMATIONS='12';
 const { createSweepCandidates, updateBroadcastedSweep, retrySweep } = require('../server');
 
@@ -12,6 +12,15 @@ const db={
 };
 
 async function main(){
+  const oneUsdtDb={
+    deposits:[{id:'dep_one',userId:'usr_1',depositAddressId:'addr_1',txHash:`0x${'5'.repeat(64)}`,logIndex:0,amount:1,creditedAmount:1,status:'credited',createdAt:now}],
+    deposit_addresses:[{id:'addr_1',userId:'usr_1',chain:'BSC',address:'0x1111111111111111111111111111111111111111',hdIndex:0}],
+    sweep_transactions:[],auditLogs:[]
+  };
+  createSweepCandidates(oneUsdtDb);
+  assert(oneUsdtDb.sweep_transactions.length===1&&oneUsdtDb.sweep_transactions[0].amount===1,'Credited 1 USDT deposit must create a sweep candidate when MIN_SWEEP_USDT=0.1');
+  assert(oneUsdtDb.auditLogs.some(entry=>entry.type==='TREASURY_SWEEP_CANDIDATE_CREATED'),'Sweep candidate creation must emit TREASURY_SWEEP_CANDIDATE_CREATED');
+
   createSweepCandidates(db);
   assert(db.sweep_transactions.length===1&&db.sweep_transactions[0].status==='not_started','Credited deposit must create one sweep candidate');
   createSweepCandidates(db);
@@ -31,6 +40,13 @@ async function main(){
   assert(failed.status==='failed_retryable','Failed token receipt must become retryable without a new broadcast');
   retrySweep(db,failed);
   assert(failed.status==='not_started'&&failed.sweepTxHash===null&&failed.failedSweepTxHashes.length===1,'Manual retry must preserve failed hash history and never overwrite it');
-  console.log('SWEEP STATE SMOKE PASS: candidate uniqueness, gas confirmation, token confirmation, restart idempotency, failure, and retry state.');
+  const requeueDb={
+    deposits:[{id:'dep_retry',userId:'usr_1',depositAddressId:'addr_1',txHash:`0x${'6'.repeat(64)}`,logIndex:0,amount:1,creditedAmount:1,status:'credited',sweepStatus:'not_started',createdAt:now}],
+    deposit_addresses:[{id:'addr_1',userId:'usr_1',chain:'BSC',address:'0x1111111111111111111111111111111111111111',hdIndex:0}],
+    sweep_transactions:[{id:'swp_retry',depositId:'dep_retry',userId:'usr_1',status:'failed_retryable',amount:1,sweepTxHash:`0x${'7'.repeat(64)}`,gasTopupStatus:'not_required'}],auditLogs:[]
+  };
+  createSweepCandidates(requeueDb);
+  assert(requeueDb.sweep_transactions.length===1&&requeueDb.sweep_transactions[0].status==='not_started'&&requeueDb.sweep_transactions[0].sweepTxHash===null,'Credited deposit with retryable sweep must be requeued without duplicate or user credit');
+  console.log('SWEEP STATE SMOKE PASS: 1 USDT candidate, candidate uniqueness, gas confirmation, token confirmation, restart idempotency, failure, and retry state.');
 }
 main().catch(error=>{console.error(`SWEEP STATE SMOKE FAIL: ${error.message}`);process.exitCode=1;});
