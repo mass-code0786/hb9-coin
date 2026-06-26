@@ -407,7 +407,7 @@ function parseBep20TransferWatcherLog(log){
   if(!Number.isInteger(log.index)||log.index<0)return {reason:'log index is invalid'};
   if(!Number.isInteger(log.blockNumber)||log.blockNumber<0)return {reason:'block number is invalid'};
   try{
-    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),6))}};
+    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),6)),contractAddress:log.address??null,topics:log.topics,data:log.data}};
   }catch(error){return {reason:`unable to decode Transfer log: ${error.message}`};}
 }
 function warnRejectedDepositWatcherLog(log,reason){console.warn('Deposit watcher rejected log:',{reason,...watcherLogContext(log)});}
@@ -456,9 +456,24 @@ function ensureDepositAddress(db,userId,chainInput='BSC'){
   audit(db,'DEPOSIT_ADDRESS_CREATED',{userId,chain,address:record.address,hdIndex});
   return record;
 }
+function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber}){
+  const failures=[];
+  if(chain!==BSC_CHAIN)failures.push(`unsupported chain: ${chain}`);
+  if(!/^0x[a-f0-9]{64}$/.test(txHash))failures.push('transaction hash must be a 32-byte hex value');
+  if(!Number.isInteger(logIndex)||logIndex<0)failures.push('log index must be a non-negative integer');
+  if(!isAddress(toAddress))failures.push('recipient address is invalid');
+  if(!isAddress(fromAddress))failures.push('sender address is invalid');
+  if(!Number.isFinite(amount)||amount<=0)failures.push('amount must be a finite value greater than zero');
+  if(!Number.isInteger(blockNumber)||blockNumber<0)failures.push('block number must be a non-negative integer');
+  return failures;
+}
 function recordBep20Transfer(db,input){
   const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=String(input.toAddress||'').trim().toLowerCase(), fromAddress=String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
-  if(chain!==BSC_CHAIN||!/^0x[a-f0-9]{64}$/.test(txHash)||!Number.isInteger(logIndex)||logIndex<0||!isAddress(toAddress)||!isAddress(fromAddress)||!Number.isFinite(amount)||amount<=0||!Number.isInteger(blockNumber)||blockNumber<0)throw Error('Invalid BEP20 transfer event');
+  const failures=validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber});
+  if(failures.length){
+    console.warn('Invalid BEP20 transfer event:',{failures,topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
+    throw Error('Invalid BEP20 transfer event');
+  }
   const address=(db.deposit_addresses||[]).find(x=>x.chain===chain&&x.address.toLowerCase()===toAddress);
   if(!address)return null;
   db.blockchain_transactions=db.blockchain_transactions||[];db.deposits=db.deposits||[];
@@ -702,4 +717,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,parseBep20TransferWatcherLog,resolveDepositWatcherStart,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+module.exports={configuredDepositWatcherStartBlock,parseBep20TransferWatcherLog,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};

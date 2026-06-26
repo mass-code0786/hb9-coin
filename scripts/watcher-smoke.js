@@ -1,4 +1,4 @@
-const { parseBep20TransferWatcherLog, resolveDepositWatcherStart } = require('../server');
+const { parseBep20TransferWatcherLog, resolveDepositWatcherStart, validateBep20TransferEvent } = require('../server');
 
 function assert(condition, message) { if (!condition) throw Error(message); }
 
@@ -21,10 +21,12 @@ assert(reset.reset && reset.nextBlock === 1000, 'Reset must position the cursor 
 
 const validLog = { topics: ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', `0x${'0'.repeat(24)}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `0x${'0'.repeat(24)}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`], data: `0x${'0'.repeat(63)}1`, transactionHash: `0x${'c'.repeat(64)}`, index: 0, blockNumber: 1000 };
 assert(parseBep20TransferWatcherLog(validLog).event?.amount === 0.000001, 'A valid Transfer log must be decoded');
+const decodedValidLog = parseBep20TransferWatcherLog(validLog).event;
+assert(validateBep20TransferEvent(decodedValidLog).length === 0, 'A valid USDT Transfer log must pass event recording validation');
 for (const [name, log] of [
   ['missing topics', { ...validLog, topics: [] }],
   ['wrong signature', { ...validLog, topics: ['0x1234', validLog.topics[1], validLog.topics[2]] }],
   ['invalid amount data', { ...validLog, data: '0x01' }]
 ]) assert(!parseBep20TransferWatcherLog(log).event, `Malformed ${name} must be rejected without throwing`);
 
-console.log('WATCHER SMOKE PASS: automatic/latest starts ignore legacy cursors, explicit starts are honored, reset starts at latest, and malformed logs are rejected safely.');
+console.log('WATCHER SMOKE PASS: automatic/latest starts ignore legacy cursors, explicit starts are honored, reset starts at latest, valid USDT events pass recording validation, and malformed logs are rejected safely.');
