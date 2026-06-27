@@ -61,6 +61,9 @@ assert(depositDb.deposits.length === 1 && depositDb.deposits[0].txHash === targe
 assert(depositDb.auditLogs.some(item => item.type === 'BEP20_DEPOSIT_DETECTED'), 'Detected transfer must write a BEP20_DEPOSIT_DETECTED audit log');
 const inactiveDb = { deposit_addresses: [{ id: 'addr_inactive', userId: 'usr_target', chain: 'BSC', address: targetAddress, signerVerified: false, disabled: false }], blockchain_transactions: [], deposits: [], auditLogs: [] };
 assert(recordBep20Transfer(inactiveDb, decodedTarget) === null && inactiveDb.deposits.length === 0, 'Inactive or unverified deposit address must not create a deposit');
+const normalizedLookupDb = { deposit_addresses: [{ id: 'addr_normalized', userId: 'usr_normalized', chain: ' bsc ', address: ` ${targetAddress.toLowerCase()} `, signerVerified: true, disabled: false }], blockchain_transactions: [], deposits: [], auditLogs: [] };
+recordBep20Transfer(normalizedLookupDb, decodedTarget);
+assert(normalizedLookupDb.deposits.length === 1 && normalizedLookupDb.deposits[0].depositAddressId === 'addr_normalized', 'Deposit lookup must normalize DB chain/address before matching decoded recipient');
 
 const legacyDb = { auditLogs: [], blockchain_transactions: [{ id: 'tx_legacy', eventKey: 'BSC:legacy:0', chain: 'BSC', amount: 1000000000000000000 }], deposits: [{ id: 'dep_legacy', chain: 'BSC', amount: 1000000000000000000, creditedAmount: 1000000000000000000 }], wallet_ledger: [{ asset: 'USDT', reason: 'BEP20 deposit credited', refId: 'BSC:legacy:0', amount: 1000000000000000000 }], sweep_transactions: [{ id: 'swp_legacy', depositId: 'dep_legacy', amount: 1000000000000000000 }], reserve_ledger: [{ asset: 'USDT', walletType: 'treasury', direction: 'credit', refId: 'swp_legacy', amount: 1000000000000000000 }], reserve_wallets: [{ asset: 'USDT', walletType: 'treasury', balance: 1000000000000000000 }] };
 assert(repairBep20RawUnitAmounts(legacyDb).corrected, 'Legacy raw-unit records must be repaired');

@@ -436,6 +436,9 @@ function watcherLogContext(log){
 function watcherConfiguredTokenAddress(){
   try{return isAddress(process.env.USDT_BEP20_CONTRACT||'')?getAddress(process.env.USDT_BEP20_CONTRACT):null;}catch(_){return null;}
 }
+function normalizedAddressLower(address){
+  try{return isAddress(String(address||'').trim())?getAddress(String(address||'').trim()).toLowerCase():null;}catch(_){return null;}
+}
 function watcherReject(log,reason,extra={}){
   console.warn('WATCHER_TRANSFER_REJECTED',{reason,...watcherLogContext(log),...extra});
   return {reason};
@@ -512,7 +515,7 @@ function derivedDepositAddress(chain,index){
   if(!status.configured)throw Error(status.error);
   return getAddress(configuredDepositXpub().deriveChild(index).address);
 }
-function addressIsBlockedUnsafe(address){return BLOCKED_UNSAFE_DEPOSIT_ADDRESSES.has(String(address||'').toLowerCase());}
+function addressIsBlockedUnsafe(address){const normalized=normalizedAddressLower(address);return normalized?BLOCKED_UNSAFE_DEPOSIT_ADDRESSES.has(normalized):BLOCKED_UNSAFE_DEPOSIT_ADDRESSES.has(String(address||'').trim().toLowerCase());}
 function isActiveVerifiedDepositAddress(record){
   return Boolean(record&&!record.disabled&&record.signerVerified===true&&!addressIsBlockedUnsafe(record.address));
 }
@@ -598,6 +601,17 @@ function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress
   if(!Number.isInteger(blockNumber)||blockNumber<0)failures.push('block number must be a non-negative integer');
   return failures;
 }
+function depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}){
+  const normalizedChain=normalizeChain(chain),normalizedToAddress=normalizedAddressLower(toAddress),records=db.deposit_addresses||[];
+  const candidates=records.map(record=>{
+    const recordChain=normalizeChain(record.chain),recordAddressNormalized=normalizedAddressLower(record.address),addressMatches=Boolean(normalizedToAddress&&recordAddressNormalized===normalizedToAddress),chainMatches=recordChain===normalizedChain,signerVerified=record.signerVerified===true,disabled=Boolean(record.disabled),blockedUnsafe=addressIsBlockedUnsafe(record.address),active=Boolean(!disabled&&signerVerified&&!blockedUnsafe);
+    return {id:record.id,userId:record.userId,chain:record.chain,recordChain,address:record.address,recordAddressNormalized,addressMatches,chainMatches,signerVerified,disabled,blockedUnsafe,active,hdIndex:record.hdIndex,walletIndex:record.walletIndex};
+  });
+  const sameAddress=candidates.filter(item=>item.addressMatches),sameChainAndAddress=sameAddress.filter(item=>item.chainMatches),activeMatch=sameChainAndAddress.find(item=>item.active);
+  const details={txHash,logIndex,amount,decodedToAddress:toAddress,normalizedToAddress,decodedChain:chain,normalizedChain,totalDepositAddresses:records.length,sameAddressCount:sameAddress.length,sameChainAndAddressCount:sameChainAndAddress.length,activeMatchFound:Boolean(activeMatch),activeMatchId:activeMatch?.id||null,sameAddress,sameChainAndAddress};
+  console.log('WATCHER_DEPOSIT_LOOKUP_DEBUG',details);
+  return {details,record:activeMatch?records.find(record=>record.id===activeMatch.id):null,anySameChainAndAddress:sameChainAndAddress[0]||null};
+}
 function isZeroValueBep20Transfer(amount){return Number(amount)===0;}
 function humanUsdtAmount(rawAmount){
   const value=Number(rawAmount);
@@ -642,7 +656,7 @@ function repairBep20RawUnitAmounts(db){
   return {corrected,transactions:correctedTransactions.size,deposits:correctedDeposits.size,sweeps:correctedSweeps.size};
 }
 function recordBep20Transfer(db,input){
-  const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=String(input.toAddress||'').trim().toLowerCase(), fromAddress=String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
+  const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=normalizedAddressLower(input.toAddress)||String(input.toAddress||'').trim().toLowerCase(), fromAddress=normalizedAddressLower(input.fromAddress||input.from)||String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
   const failures=validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber});
   const configuredToken=watcherConfiguredTokenAddress();
   if(configuredToken&&input.contractAddress){
@@ -656,14 +670,15 @@ function recordBep20Transfer(db,input){
     console.warn('WATCHER_TRANSFER_REJECTED',{reason:'zero-value Transfer event',topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
     return null;
   }
-  const addressRecord=(db.deposit_addresses||[]).find(x=>x.chain===chain&&String(x.address||'').toLowerCase()===toAddress);
-  if(addressRecord&&!isActiveVerifiedDepositAddress(addressRecord)){
-    console.warn('WATCHER_TRANSFER_REJECTED',{reason:'deposit address is disabled or not signerVerified',toAddress:getAddress(toAddress),depositAddressId:addressRecord.id,disabled:Boolean(addressRecord.disabled),signerVerified:addressRecord.signerVerified===true,txHash,logIndex,amount});
+  const lookup=depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}),addressRecord=lookup.record;
+  if(!addressRecord&&lookup.anySameChainAndAddress){
+    const found=lookup.anySameChainAndAddress;
+    console.warn('WATCHER_TRANSFER_REJECTED',{reason:'deposit address is disabled or not signerVerified',rejectionLine:'recordBep20Transfer: active/signerVerified/disabled check',toAddress:getAddress(toAddress),depositAddressId:found.id,disabled:found.disabled,signerVerified:found.signerVerified,active:found.active,blockedUnsafe:found.blockedUnsafe,chain:found.chain,recordChain:found.recordChain,chainMatches:found.chainMatches,addressMatches:found.addressMatches,txHash,logIndex,amount});
     return null;
   }
-  const address=addressRecord&&isActiveVerifiedDepositAddress(addressRecord)?addressRecord:null;
+  const address=addressRecord;
   if(address)console.log('WATCHER_DEPOSIT_ADDRESS_MATCHED',{txHash,logIndex,userId:address.userId,depositAddressId:address.id,toAddress:address.address,amount});
-  else console.warn('WATCHER_TRANSFER_REJECTED',{reason:'recipient is not an active signerVerified deposit address',toAddress:isAddress(toAddress)?getAddress(toAddress):toAddress,txHash,logIndex,amount});
+  else console.warn('WATCHER_TRANSFER_REJECTED',{reason:'recipient is not an active signerVerified deposit address',rejectionLine:'recordBep20Transfer: normalized address+chain lookup returned no active record',toAddress:isAddress(toAddress)?getAddress(toAddress):toAddress,normalizedToAddress:toAddress,chain,lookup:lookup.details,txHash,logIndex,amount});
   if(!address)return null;
   db.blockchain_transactions=db.blockchain_transactions||[];db.deposits=db.deposits||[];
   const eventKey=`${chain}:${txHash}:${logIndex}`,now=new Date().toISOString();
