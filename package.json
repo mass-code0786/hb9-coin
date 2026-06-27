@@ -7,13 +7,8 @@
     "dev": "node scripts/dev-server.js",
     "start": "node server.js",
     "seed": "node scripts/seed.js",
-    "derive:xpub": "node scripts/derive-xpub.js",
-    "migrate:deposit-address-safety": "node scripts/migrate-deposit-address-safety.js",
-    "replay:one-bep20-deposit": "node scripts/replay-one-bep20-deposit.js",
-    "diagnose:deposit-tx": "node scripts/diagnose-deposit-tx.js",
     "smoke": "node scripts/smoke.js",
-    "smoke:hd-signer": "node scripts/hd-sweep-signer-smoke.js",
-    "smoke:watcher": "node scripts/watcher-smoke.js"
+    "test": "node scripts/nowpayments-smoke.js"
   },
   "engines": {
     "node": ">=18"

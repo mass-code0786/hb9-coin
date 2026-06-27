@@ -14,6 +14,9 @@ function resolveDataFile(value = process.env.DATA_FILE) {
 const DATA = resolveDataFile();
 const PUBLIC = path.join(__dirname, 'public');
 const APP_URL = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://coin.hb9.live' : `http://localhost:${PORT}`);
+const NOWPAYMENTS_BASE_URL = String(process.env.NOWPAYMENTS_BASE_URL || 'https://api.nowpayments.io/v1').replace(/\/+$/, '');
+const NOWPAYMENTS_SUCCESS_URL = process.env.NOWPAYMENTS_SUCCESS_URL || 'https://coin.hb9.live/deposit/success';
+const NOWPAYMENTS_CANCEL_URL = process.env.NOWPAYMENTS_CANCEL_URL || 'https://coin.hb9.live/deposit/cancel';
 const PRODUCTION_DOMAIN = /^https:\/\/coin\.hb9\.live\/?$/i.test(APP_URL);
 const DEV_ONLY_DEMO = process.env.NODE_ENV !== 'production' && process.env.DEMO_MODE === 'true';
 const DEMO_MODE = DEV_ONLY_DEMO;
@@ -419,13 +422,9 @@ function hdWalletConsistencyStatus(){
 }
 function depositServiceStatus(){
   const missing=[];
-  if(!depositAddressServiceStatus().configured)missing.push('HD_WALLET_XPUB');
-  if(!process.env.BSC_RPC_URL)missing.push('BSC_RPC_URL');
-  if(!isAddress(process.env.USDT_BEP20_CONTRACT||''))missing.push('USDT_BEP20_CONTRACT');
-  if(!isAddress(process.env.TREASURY_WALLET_BSC||''))missing.push('TREASURY_WALLET_BSC');
-  if(!Number.isInteger(Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12))||Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12)<1)missing.push('REQUIRED_DEPOSIT_CONFIRMATIONS');
-  if(process.env.DEPOSIT_WATCHER_ENABLED!=='true')missing.push('DEPOSIT_WATCHER_ENABLED=true');
-  return {configured:missing.length===0,watcherEnabled:process.env.DEPOSIT_WATCHER_ENABLED==='true',missing,message:missing.length?'Automatic deposit service is not configured yet.':'Automatic deposit monitoring is active.'};
+  if(!process.env.NOWPAYMENTS_API_KEY)missing.push('NOWPAYMENTS_API_KEY');
+  if(!process.env.NOWPAYMENTS_IPN_SECRET)missing.push('NOWPAYMENTS_IPN_SECRET');
+  return {configured:missing.length===0,provider:'NOWPayments',missing,message:missing.length?'NOWPayments deposit gateway is not configured yet.':'NOWPayments deposit gateway is active.'};
 }
 function depositAddressServiceStatus(){
   const status=hdWalletConsistencyStatus();
@@ -530,21 +529,7 @@ async function debugTargetWatcherReceipt(provider,targetTxHash=watcherDebugTxHas
   }catch(error){console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:`receipt lookup failed: ${error.message}`});return null;}
 }
 function sweepServiceStatus(){
-  const missing=[];
-  if(process.env.SWEEP_ENABLED!=='true')missing.push('SWEEP_ENABLED=true');
-  if(!process.env.BSC_RPC_URL)missing.push('BSC_RPC_URL');
-  if(!isAddress(process.env.USDT_BEP20_CONTRACT||''))missing.push('USDT_BEP20_CONTRACT');
-  if(!isAddress(process.env.TREASURY_WALLET_BSC||''))missing.push('TREASURY_WALLET_BSC');
-  if(!configuredHdSignerSource())missing.push('HD_WALLET_MNEMONIC or HD_WALLET_XPRV');
-  if(!process.env.GAS_WALLET_PRIVATE_KEY)missing.push('GAS_WALLET_PRIVATE_KEY');
-  if(!positiveEnvNumber('MIN_SWEEP_USDT',1))missing.push('MIN_SWEEP_USDT');
-  if(!positiveEnvNumber('SWEEP_POLL_MS',60000))missing.push('SWEEP_POLL_MS');
-  if(!positiveEnvNumber('SWEEP_CONFIRMATIONS',12))missing.push('SWEEP_CONFIRMATIONS');
-  if(!positiveEnvNumber('GAS_TOPUP_BNB_AMOUNT'))missing.push('GAS_TOPUP_BNB_AMOUNT');
-  if(!positiveEnvNumber('MIN_DEPOSIT_ADDRESS_BNB'))missing.push('MIN_DEPOSIT_ADDRESS_BNB');
-  const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)missing.push(hdStatus.error||'valid HD wallet signer configuration');
-  try{if(process.env.GAS_WALLET_PRIVATE_KEY)new Wallet(process.env.GAS_WALLET_PRIVATE_KEY);}catch(_){missing.push('valid gas wallet private key');}
-  return {configured:missing.length===0,enabled:process.env.SWEEP_ENABLED==='true',missing,message:missing.length?'Treasury sweep service is not configured yet.':'Treasury sweep service is active.'};
+  return {configured:false,enabled:false,missing:[],message:'Treasury sweep flow is disabled. Deposits are handled by NOWPayments.'};
 }
 function depositSignerDiagnostics(addressRecord,provider=null){
   const expected=getAddress(addressRecord.address),walletIndex=Number(addressRecord.hdIndex),basePath=addressRecord.hdBasePath||hdBaseDerivationPath(),depositPath=addressRecord.derivationPath||depositDerivationPath(walletIndex,basePath),diagnostics={expectedDepositAddress:expected,derivedSignerAddress:null,depositDerivationPath:addressRecord.derivationPath||depositPath,sweepDerivationPath:depositPath,walletIndex,hdFingerprint:addressRecord.hdFingerprint||hdFingerprint(),hdSignerSource:configuredHdSignerSource(),reason:null};
@@ -669,14 +654,76 @@ function amountsMatch(a,b){return Math.abs(Number(a)-Number(b))<1e-9;}
 function pendingDepositIntentForTransfer(db,{userId,depositAddressId,amount}){
   return (db.deposits||[]).find(item=>item.userId===userId&&item.depositAddressId===depositAddressId&&item.status==='waiting_for_blockchain_transaction'&&!item.txHash&&amountsMatch(item.amount,amount));
 }
-function createDepositIntent(db,userId,amount,chainInput='BSC'){
-  const value=Number(amount),chain=normalizeChain(chainInput);
+function sortedJson(value){
+  if(Array.isArray(value))return value.map(sortedJson);
+  if(value&&typeof value==='object'){
+    return Object.keys(value).sort().reduce((out,key)=>{out[key]=sortedJson(value[key]);return out;},{});
+  }
+  return value;
+}
+function hmacSha512(value,secret){return crypto.createHmac('sha512',secret).update(value).digest('hex');}
+function safeEqualHex(a,b){
+  const left=Buffer.from(String(a||''),'hex'),right=Buffer.from(String(b||''),'hex');
+  return left.length>0&&left.length===right.length&&crypto.timingSafeEqual(left,right);
+}
+function verifyNowPaymentsSignature(rawBody,payload,signature,secret=process.env.NOWPAYMENTS_IPN_SECRET){
+  if(!secret||!signature)return false;
+  const candidates=[rawBody,JSON.stringify(sortedJson(payload))].filter(Boolean).map(value=>hmacSha512(value,secret));
+  return candidates.some(expected=>safeEqualHex(expected,signature));
+}
+function nowPaymentsIpnUrl(){return `${APP_URL.replace(/\/+$/,'')}/api/nowpayments/ipn`;}
+async function nowPaymentsRequest(endpoint,payload){
+  if(process.env.NOWPAYMENTS_MOCK==='true'){
+    const invoiceId=`mock_inv_${crypto.randomUUID()}`,paymentId=`mock_pay_${crypto.randomUUID()}`;
+    return {id:invoiceId,invoice_id:invoiceId,payment_id:paymentId,invoice_url:`https://nowpayments.io/payment/?iid=${invoiceId}`,pay_currency:'usdtbsc',pay_address:'TMockNowPaymentsAddress',price_amount:payload.price_amount,price_currency:payload.price_currency};
+  }
+  const response=await fetch(`${NOWPAYMENTS_BASE_URL}${endpoint}`,{method:'POST',headers:{'Content-Type':'application/json','x-api-key':process.env.NOWPAYMENTS_API_KEY},body:JSON.stringify(payload)});
+  const text=await response.text();
+  let data={};try{data=text?JSON.parse(text):{};}catch(_){data={raw:text};}
+  if(!response.ok)throw Error(data.message||data.error||`NOWPayments request failed with ${response.status}`);
+  return data;
+}
+async function createNowPaymentsDeposit(db,userId,amount){
+  const status=depositServiceStatus();
+  if(!status.configured)throw Error(status.message);
+  const value=roundCurrency(Number(amount));
   if(!Number.isFinite(value)||value<=0)throw Error('Deposit amount must be greater than zero');
-  const address=ensureDepositAddress(db,userId,chain),now=new Date().toISOString(),requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
-  const deposit={id:id('dep'),userId,amount:roundCurrency(value),asset:'USDT',chain,network:'USDT BEP20',depositAddressId:address.id,status:'waiting_for_blockchain_transaction',confirmations:0,requiredConfirmations,txHash:null,logIndex:null,createdAt:now};
+  const depositId=id('dep'),now=new Date().toISOString();
+  const invoice=await nowPaymentsRequest('/invoice',{price_amount:value,price_currency:'usd',order_id:depositId,order_description:`HB9 USDT wallet deposit ${depositId}`,ipn_callback_url:nowPaymentsIpnUrl(),success_url:NOWPAYMENTS_SUCCESS_URL,cancel_url:NOWPAYMENTS_CANCEL_URL});
+  const paymentId=String(invoice.payment_id||invoice.id||invoice.invoice_id||'');
+  const invoiceId=String(invoice.invoice_id||invoice.id||'');
+  const deposit={id:depositId,userId,amount:value,asset:'USDT',provider:'NOWPayments',network:'NOWPayments',status:'pending',paymentStatus:'pending',paymentId,payment_id:paymentId,invoiceId,invoice_id:invoiceId,invoiceUrl:invoice.invoice_url||invoice.payment_url||invoice.url||null,payAddress:invoice.pay_address||null,payCurrency:invoice.pay_currency||null,createdAt:now,credited:false,creditedAt:null};
   db.deposits=db.deposits||[];db.deposits.push(deposit);
-  audit(db,'BEP20_DEPOSIT_INTENT_CREATED',{depositId:deposit.id,userId,amount:deposit.amount,depositAddressId:address.id,address:address.address});
-  return {deposit,depositAddress:address};
+  audit(db,'NOWPAYMENTS_DEPOSIT_CREATED',{depositId,userId,amount:value,paymentId,invoiceId,payCurrency:deposit.payCurrency});
+  return {deposit,payment:invoice,service:status};
+}
+function nowPaymentMatches(deposit,payloadPaymentId,payloadInvoiceId){
+  const paymentId=String(payloadPaymentId||''),invoiceId=String(payloadInvoiceId||'');
+  return Boolean((paymentId&&[deposit.paymentId,deposit.payment_id].map(String).includes(paymentId))||(invoiceId&&[deposit.invoiceId,deposit.invoice_id].map(String).includes(invoiceId)));
+}
+function normalizeNowPaymentStatus(status){return String(status||'').trim().toLowerCase();}
+function creditNowPaymentsDeposit(db,payload){
+  db.deposits=db.deposits||[];db.nowpayments_ipn_events=db.nowpayments_ipn_events||[];
+  const paymentId=String(payload.payment_id||payload.id||''),invoiceId=String(payload.invoice_id||payload.invoiceId||''),status=normalizeNowPaymentStatus(payload.payment_status),now=new Date().toISOString();
+  const deposit=db.deposits.find(item=>item.provider==='NOWPayments'&&nowPaymentMatches(item,paymentId,invoiceId));
+  if(!deposit)throw Error('Matching NOWPayments deposit was not found');
+  deposit.paymentStatus=status||deposit.paymentStatus;
+  deposit.lastIpnAt=now;
+  deposit.nowpaymentsPayload=payload;
+  if(['failed','expired','refunded'].includes(status)){
+    Object.assign(deposit,{status:'failed',failedAt:deposit.failedAt||now});
+    return {deposit,credited:false,reason:'terminal_failed_status'};
+  }
+  if(status==='confirming'||status==='confirmed')deposit.status='confirming';
+  if(!['confirmed','finished'].includes(status))return {deposit,credited:false,reason:'not_final'};
+  const incomingAmount=Number(payload.price_amount??payload.actually_paid??payload.pay_amount);
+  if(Number.isFinite(incomingAmount)&&incomingAmount>0&&!amountsMatch(incomingAmount,deposit.amount))throw Error('NOWPayments amount does not match deposit invoice');
+  const refId=paymentId||invoiceId||deposit.id;
+  const alreadyCredited=deposit.credited||(db.wallet_ledger||[]).some(x=>x.userId===deposit.userId&&x.asset==='USDT'&&x.direction==='credit'&&x.reason==='NOWPayments deposit credited'&&x.refId===refId);
+  if(!alreadyCredited)walletEntry(db,{userId:deposit.userId,asset:'USDT',direction:'credit',amount:deposit.amount,reason:'NOWPayments deposit credited',refId});
+  Object.assign(deposit,{status:'credited',paymentStatus:status,credited:true,creditedAt:deposit.creditedAt||now,creditedAmount:deposit.amount,paymentId:deposit.paymentId||paymentId,invoiceId:deposit.invoiceId||invoiceId});
+  audit(db,'NOWPAYMENTS_DEPOSIT_CREDITED',{depositId:deposit.id,userId:deposit.userId,amount:deposit.amount,paymentId,invoiceId,duplicate:alreadyCredited});
+  return {deposit,credited:!alreadyCredited,duplicate:alreadyCredited};
 }
 function depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}){
   const normalizedChain=normalizeChain(chain),normalizedToAddress=normalizedAddressLower(toAddress),records=db.deposit_addresses||[];
@@ -850,7 +897,7 @@ async function pollDepositWatcher(){
     console.log('WATCHER_SCAN_BLOCK_END',{latestBlock,nextBlock,toBlock,cursorMode:start.cursorMode,targetTxHash,targetBlock,targetInRange,processed:false,reason:'no new block range'});
   }catch(error){console.error('Deposit watcher error:',error.message);}finally{watcherRunning=false;}
 }
-function startDepositWatcher(){if(process.env.DEPOSIT_WATCHER_ENABLED==='true'){pollDepositWatcher();watcherTimer=setInterval(pollDepositWatcher,WATCHER_POLL_MS);}}
+function startDepositWatcher(){return false;}
 function sweepRecordForDeposit(db,depositId){return (db.sweep_transactions||[]).find(item=>item.depositId===depositId);}
 function emitSweepLog(db,type,details){console.log(type,details);audit(db,type,details);}
 function createSweepCandidates(db){
@@ -917,7 +964,7 @@ async function pollSweepWorker(){
   if(sweepRunning||!sweepServiceStatus().configured)return;sweepRunning=true;
   try{const provider=new JsonRpcProvider(process.env.BSC_RPC_URL),latestBlock=await provider.getBlockNumber(),db=readDB();createSweepCandidates(db);for(const sweep of db.sweep_transactions||[]){if(['broadcasted','gas_topup_broadcasted'].includes(sweep.status)||sweep.gasTopupStatus==='broadcasted')await updateBroadcastedSweep(db,sweep,provider,latestBlock);if(['not_started','gas_funded'].includes(sweep.status))await executeSweep(db,sweep,provider);}writeDB(db);}catch(error){console.error('Sweep worker error:',error.message);}finally{sweepRunning=false;}
 }
-function startSweepWorker(){if(process.env.SWEEP_ENABLED==='true'){pollSweepWorker();sweepTimer=setInterval(pollSweepWorker,Number(process.env.SWEEP_POLL_MS||60000));}}
+function startSweepWorker(){return false;}
 function retrySweep(db,sweep){if(!sweep||sweep.status!=='failed_retryable')throw Error('Only failed retryable sweeps can be retried');const now=new Date().toISOString();if(sweep.sweepTxHash)(sweep.failedSweepTxHashes||=[]).push(sweep.sweepTxHash);if(sweep.gasTopupTxHash&&sweep.failedPhase==='gas_topup')(sweep.failedGasTopupTxHashes||=[]).push(sweep.gasTopupTxHash);Object.assign(sweep,{status:'not_started',sweepTxHash:null,gasTopupTxHash:null,gasTopupStatus:'not_required',failureReason:null,failedPhase:null,retryRequestedAt:now,updatedAt:now});const deposit=(db.deposits||[]).find(item=>item.id===sweep.depositId);if(deposit)deposit.sweepStatus='not_started';audit(db,'TREASURY_SWEEP_RETRY_REQUESTED',{sweepId:sweep.id,depositId:sweep.depositId});}
 function incomeContext(db,userId,date,hb9PriceOverride=null) {
   const activeStakeUsd=roundCurrency(activeStakes(db,userId).reduce((n,s)=>n+s.amount,0));
@@ -987,6 +1034,7 @@ function auth(req, db) {
 }
 function send(res,status,payload) { res.writeHead(status, {'Content-Type':'application/json'}); res.end(JSON.stringify(payload)); }
 function body(req) { return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('end',()=>{try{resolve(b?JSON.parse(b):{})}catch(e){reject(e)}})}); }
+function rawBody(req) { return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('error',reject);req.on('end',()=>resolve(b));}); }
 function safeUser(u){ const {passwordHash,salt,...safe}=u; return safe; }
 function dashboard(db,u) {
   const stake=activeStakes(db,u.id).reduce((n,s)=>n+s.amount,0), completed=business(db,u.id), required=stake*setting(db,'directMultiplier');
@@ -1002,16 +1050,29 @@ const server=http.createServer(async(req,res)=>{
   try {
     if (req.url.startsWith('/api/')) {
       const db=readDB(), url=new URL(req.url,`http://${req.headers.host}`), p=url.pathname, method=req.method;
+      if(p==='/api/nowpayments/ipn'&&method==='POST'){
+        const raw=await rawBody(req);
+        let payload={};try{payload=raw?JSON.parse(raw):{};}catch(_){return send(res,400,{error:'Invalid JSON'});}
+        const signature=req.headers['x-nowpayments-sig'];
+        db.nowpayments_ipn_events=db.nowpayments_ipn_events||[];
+        const event={id:id('npi'),paymentId:payload.payment_id||payload.id||null,invoiceId:payload.invoice_id||null,status:payload.payment_status||null,validSignature:false,createdAt:new Date().toISOString(),payload};
+        if(!verifyNowPaymentsSignature(raw,payload,signature)){
+          event.rejected=true;event.reason='invalid_signature';db.nowpayments_ipn_events.push(event);audit(db,'NOWPAYMENTS_IPN_REJECTED',{reason:event.reason,paymentId:event.paymentId,invoiceId:event.invoiceId,status:event.status});writeDB(db);return send(res,401,{error:'Invalid NOWPayments signature'});
+        }
+        event.validSignature=true;
+        try{const result=creditNowPaymentsDeposit(db,payload);event.depositId=result.deposit.id;event.credited=result.credited;event.duplicate=Boolean(result.duplicate);db.nowpayments_ipn_events.push(event);audit(db,'NOWPAYMENTS_IPN_RECEIVED',{paymentId:event.paymentId,invoiceId:event.invoiceId,status:event.status,depositId:event.depositId,credited:event.credited,duplicate:event.duplicate});writeDB(db);return send(res,200,{ok:true,credited:result.credited,duplicate:Boolean(result.duplicate),status:result.deposit.status});}
+        catch(error){event.rejected=true;event.reason=error.message;db.nowpayments_ipn_events.push(event);audit(db,'NOWPAYMENTS_IPN_REJECTED',{reason:event.reason,paymentId:event.paymentId,invoiceId:event.invoiceId,status:event.status});writeDB(db);return send(res,400,{error:error.message});}
+      }
       if (p==='/api/auth/login'&&method==='POST') { const {email,password}=await body(req); if(typeof email!=='string'||typeof password!=='string')return send(res,400,{error:'Email and password are required'}); const u=db.users.find(x=>x.email.toLowerCase()===email.toLowerCase()); if(!u||!check(password,u)||u.status!=='active') return send(res,401,{error:'Invalid credentials or blocked account'}); const token=crypto.randomBytes(32).toString('hex'); sessions.set(token,{userId:u.id}); return send(res,200,{token,user:safeUser(u)}); }
-      if (p==='/api/auth/register'&&method==='POST') { const {name,email,password,sponsorEmail,walletAddress}=await body(req); if(!name||!email||!password||password.length<8)return send(res,400,{error:'Name, email and 8+ character password are required'}); if(typeof walletAddress!=='string'||!/^0x[a-fA-F0-9]{40}$/.test(walletAddress))return send(res,400,{error:'Enter a valid 42-character BEP20 wallet address starting with 0x'}); if(db.users.some(x=>x.email.toLowerCase()===email.toLowerCase()))return send(res,409,{error:'Email already registered'});const addressService=depositAddressServiceStatus();if(!addressService.configured)return send(res,503,{error:addressService.error}); const h=hash(password), sponsor=db.users.find(x=>x.email===sponsorEmail); const u={id:id('usr'),name,email:email.toLowerCase(),role:'user',status:'active',passwordHash:h.hash,salt:h.salt,walletAddress,sponsorId:sponsor?.id||null,createdAt:new Date().toISOString()}; db.users.push(u);ensureDepositAddress(db,u.id,'BSC');writeDB(db);return send(res,201,{message:'Registration complete. Please log in.'}); }
+      if (p==='/api/auth/register'&&method==='POST') { const {name,email,password,sponsorEmail,walletAddress}=await body(req); if(!name||!email||!password||password.length<8)return send(res,400,{error:'Name, email and 8+ character password are required'}); if(walletAddress&&typeof walletAddress==='string'&&!/^0x[a-fA-F0-9]{40}$/.test(walletAddress))return send(res,400,{error:'Enter a valid 42-character BEP20 wallet address starting with 0x'}); if(db.users.some(x=>x.email.toLowerCase()===email.toLowerCase()))return send(res,409,{error:'Email already registered'}); const h=hash(password), sponsor=db.users.find(x=>x.email===sponsorEmail); const u={id:id('usr'),name,email:email.toLowerCase(),role:'user',status:'active',passwordHash:h.hash,salt:h.salt,walletAddress:walletAddress||null,sponsorId:sponsor?.id||null,createdAt:new Date().toISOString()}; db.users.push(u);writeDB(db);return send(res,201,{message:'Registration complete. Please log in.'}); }
       const u=auth(req,db); if(!u)return send(res,401,{error:'Authentication required'});
       if(p==='/api/market/hb9-ticker'&&method==='GET'){try{const market=await exchangeMarket(db,'1d',1);return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,price:market.price,icpPrice:market.icpPrice,hb9BasePrice:market.hb9BasePrice,priceOffset:market.priceOffset,hb9BuyPrice:market.hb9BuyPrice,hb9SellPrice:market.hb9SellPrice,buyPrice:market.buyPrice,sellPrice:market.sellPrice,spreadPercent:market.spreadPercent,manualOverrideEnabled:market.manualOverrideEnabled,high24h:market.high24h,low24h:market.low24h,volume24h:market.baseVolume,quoteVolume24h:market.quoteVolume,changePercent:market.changePercent});}catch(error){return send(res,503,{error:error.message});}}
       if(p==='/api/market/hb9-klines'&&method==='GET'){const interval={"15m":"15m","1h":"1h","4h":"4h","1d":"1d"}[url.searchParams.get('interval')]||'1d';try{const market=await exchangeMarket(db,interval,120);return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,candles:market.candles});}catch(error){return send(res,503,{error:error.message});}}
       if(p==='/api/market/hb9-usdt'&&method==='GET'){const market=await exchangeMarket(db);return send(res,200,{symbol:'HB9/USDT',...market});}
       if(p==='/api/dashboard'&&method==='GET')return send(res,200,dashboard(db,u));
-      if(p==='/api/deposit-address'&&method==='GET'){const status=depositAddressServiceStatus();if(!status.configured)return send(res,503,{error:status.error});try{const record=ensureDepositAddress(db,u.id,url.searchParams.get('chain')||BSC_CHAIN);writeDB(db);return send(res,200,{depositAddress:record,service:depositServiceStatus()});}catch(error){return send(res,503,{error:'Deposit address service is not configured'});}}
-      if(p==='/api/deposits'&&method==='POST'){const status=depositAddressServiceStatus();if(!status.configured)return send(res,503,{error:status.error});try{const input=await body(req),result=createDepositIntent(db,u.id,input.amount,url.searchParams.get('chain')||BSC_CHAIN);writeDB(db);return send(res,201,{message:'Deposit request created. Send exact USDT BEP20 amount to the verified address.',deposit:result.deposit,depositAddress:result.depositAddress,service:depositServiceStatus()});}catch(error){return send(res,400,{error:error.message});}}
-      if(p==='/api/internal/deposit-events'&&method==='POST'&&process.env.DEPOSIT_WATCHER_TEST_MODE==='true'){const event=await body(req),tx=recordBep20Transfer(db,event);if(!tx)return send(res,202,{message:'Transfer does not target an assigned deposit address'});updateDepositConfirmations(db,Number(event.currentBlock));writeDB(db);const deposit=db.deposits.find(x=>x.chain===tx.chain&&x.txHash===tx.txHash&&Number(x.logIndex)===Number(tx.logIndex));return send(res,200,{transaction:tx,deposit});}
+      if(p==='/api/deposit-address'&&method==='GET')return send(res,410,{error:'HD wallet deposit addresses are disabled. Use NOWPayments deposits.'});
+      if(p==='/api/deposits'&&method==='POST'){try{const input=await body(req),result=await createNowPaymentsDeposit(db,u.id,input.amount);writeDB(db);return send(res,201,{message:'NOWPayments deposit created',deposit:result.deposit,payment:result.payment,service:result.service});}catch(error){return send(res,400,{error:error.message});}}
+      if(p==='/api/internal/deposit-events'&&method==='POST')return send(res,410,{error:'BEP20 watcher deposit ingestion is disabled'});
       if(p==='/api/convert'&&method==='POST'){if(!db.settings.exchangeEnabled)return send(res,403,{error:'Exchange is disabled'});const {amount}=await body(req), value=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), rate=market.buyPrice, fee=setting(db,'tradingFeePercent')+setting(db,'buyFeePercent');if(!Number.isFinite(value)||value<=0)return send(res,400,{error:'Conversion amount is invalid'});if(value>balances.usdt)return send(res,400,{error:'Not enough USDT balance'});const hb9Amount=roundCurrency(value/rate*(1-fee/100));if(reserveWallet(db,'HB9','exchange').balance<hb9Amount)return send(res,400,{error:'HB9 reserve is insufficient'});const orderId=id('xord'),createdAt=new Date().toISOString();reserveMove(db,{asset:'HB9',walletType:'exchange',direction:'debit',amount:hb9Amount,reason:'HB9 buy',userId:u.id,refId:orderId});reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:value,reason:'HB9 buy',userId:u.id,refId:orderId});walletEntry(db,{userId:u.id,asset:'USDT',direction:'debit',amount:value,reason:'HB9 buy',refId:orderId});walletEntry(db,{userId:u.id,asset:'HB9',direction:'credit',amount:hb9Amount,reason:'HB9 buy',refId:orderId});db.conversions=(db.conversions||[]);db.exchange_orders=db.exchange_orders||[];const order={id:orderId,userId:u.id,direction:'buy',usdtAmount:value,hb9Amount,rate,buyPrice:rate,sellPrice:market.sellPrice,feePercent:fee,status:'completed',createdAt,immutable:true};db.conversions.push({id:id('cnv'),...order});db.exchange_orders.push(order);writeDB(db);return send(res,201,{message:'USDT converted to HB9',hb9Amount,buyPrice:rate});}
       if(p==='/api/exchange/sell'&&method==='POST'){if(!db.settings.exchangeEnabled)return send(res,403,{error:'Exchange is disabled'});const {amount}=await body(req), hb9Amount=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), rate=market.sellPrice, fee=setting(db,'tradingFeePercent')+setting(db,'sellFeePercent');if(!Number.isFinite(hb9Amount)||hb9Amount<=0)return send(res,400,{error:'HB9 amount is invalid'});if(hb9Amount>balances.hb9)return send(res,400,{error:'Not enough HB9 wallet balance'});const usdtAmount=roundCurrency(hb9Amount*rate*(1-fee/100));if(reserveWallet(db,'USDT','treasury').balance<usdtAmount)return send(res,400,{error:'USDT reserve is insufficient'});const orderId=id('xord'),createdAt=new Date().toISOString();reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'debit',amount:usdtAmount,reason:'HB9 sell payout',userId:u.id,refId:orderId});burnHb9(db,{amount:hb9Amount,reason:'HB9 sell burn',userId:u.id,refId:orderId});walletEntry(db,{userId:u.id,asset:'HB9',direction:'debit',amount:hb9Amount,reason:'HB9 sell burn',refId:orderId});walletEntry(db,{userId:u.id,asset:'USDT',direction:'credit',amount:usdtAmount,reason:'HB9 sell payout',refId:orderId});db.conversions=(db.conversions||[]);db.exchange_orders=db.exchange_orders||[];const order={id:orderId,userId:u.id,direction:'sell',hb9Amount,usdtAmount,rate,sellPrice:rate,buyPrice:market.buyPrice,feePercent:fee,status:'completed',burnedHb9:hb9Amount,createdAt,immutable:true};db.conversions.push({id:id('cnv'),...order});db.exchange_orders.push(order);writeDB(db);return send(res,201,{message:'HB9 converted to USDT and burned',usdtAmount,sellPrice:rate,burnedHb9:hb9Amount,totalBurnedHb9:burnTotal(db),remainingHb9Supply:solvencyReport(db).remainingHb9Supply,circulatingHb9:solvencyReport(db).circulatingHb9});}
       if(p==='/api/stakes'&&method==='POST'){const {amount}=await body(req), coinAmount=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), price=market.buyPrice, payoutPrice=Number(market.hb9BasePrice||market.price||market.icpPrice||marketSettings(db).fallbackPrice);if(!Number.isFinite(coinAmount)||coinAmount<=0)return send(res,400,{error:'HB9 stake amount is invalid'});if(coinAmount>balances.hb9)return send(res,400,{error:'Not enough HB9 balance'});const isFirstStake=!db.stakes.some(s=>s.userId===u.id), usdAmount=roundCurrency(coinAmount*price), createdAt=new Date().toISOString(), stake={id:id('stk'),userId:u.id,amount:usdAmount,usdValueAtStake:usdAmount,coinAmount,hb9Amount:coinAmount,hb9PriceAtStake:price,status:'active',startDate:today(),dailyRate:db.settings.dailyRoi/100,createdAt};db.stakes.push(stake);walletEntry(db,{userId:u.id,asset:'HB9',direction:'lock',amount:coinAmount,reason:'HB9 stake',refId:stake.id});if(u.sponsorId){const referralPercent=setting(db,'referralPercent'),referralUsdAmount=roundCurrency(usdAmount*referralPercent/100),referralHb9Amount=payoutPrice>0?roundCurrency(referralUsdAmount/payoutPrice):0,refId=id('ref');let status='credited',creditedHb9=referralHb9Amount,note='Referral income credited';try{reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:referralHb9Amount,reason:'Referral income emission',userId:u.sponsorId,refId});walletEntry(db,{userId:u.sponsorId,asset:'HB9',direction:'credit',amount:referralHb9Amount,reason:'Referral income credited',refId});}catch(error){status='queued';creditedHb9=0;note='HB9 income reserve insufficient';}db.referralLedger=(db.referralLedger||[]);db.income_emissions=db.income_emissions||[];db.referralLedger.push({id:refId,type:'REFERRAL_INCOME',asset:'HB9',sponsorId:u.sponsorId,referredUserId:u.id,stakeAmount:usdAmount,stakeCoinAmount:coinAmount,referralPercent,referralAmount:creditedHb9,referralHb9Amount:creditedHb9,queuedHb9Amount:status==='queued'?referralHb9Amount:0,referralUsdAmount,hb9PriceAtCredit:payoutPrice,hb9PriceAtPayout:payoutPrice,status,note,date:today(),createdAt,immutable:true});db.income_emissions.push({id:id('iem'),userId:u.sponsorId,type:'REFERRAL_INCOME',asset:'HB9',amount:referralHb9Amount,valueUsd:referralUsdAmount,status,reason:note,createdAt,immutable:true});}if(isFirstStake)payLevelIncome(db,u,stake,payoutPrice);writeDB(db);return send(res,201,{message:'HB9 permanent stake created',stake:{coinAmount,usdAmount,hb9PriceAtStake:price}});}
@@ -1026,8 +1087,8 @@ const server=http.createServer(async(req,res)=>{
       if(p.startsWith('/api/admin/withdrawals/')&&p.endsWith('/payout')&&method==='POST'){const wd=db.withdrawals.find(x=>x.id===p.split('/')[4]);if(!wd||wd.status!=='pending')return send(res,400,{error:'Pending withdrawal not found'});wd.status='approved';wd.paidAt=new Date().toISOString();wd.paidBy=u.id;walletEntry(db,{userId:wd.userId,asset:'USDT',direction:'payout',amount:wd.amount,reason:'USDT withdrawal payout',refId:wd.id});writeDB(db);return send(res,200,{message:'Withdrawal payout recorded',withdrawal:wd});}
       if(p==='/api/admin/market-settings'&&method==='PUT'){const result=setMarketSettings(db,await body(req),u.id);if(result.error)return send(res,400,{error:result.error});writeDB(db);return send(res,200,{message:'HB9 market prices saved',marketSettings:result.settings,priceHistory:db.hb9_price_history||[]});}
       if(p==='/api/admin/deposits/search'&&method==='GET'){const q=String(url.searchParams.get('q')||'').toLowerCase(),userId=url.searchParams.get('userId');const records=(db.deposits||[]).filter(x=>(!userId||x.userId===userId)&&(!q||String(x.userId||'').toLowerCase().includes(q)||String(x.txHash||'').toLowerCase().includes(q)||String(x.sweepTxHash||'').toLowerCase().includes(q)||String(x.depositAddressId||'').toLowerCase().includes(q)||String((db.deposit_addresses||[]).find(a=>a.id===x.depositAddressId)?.address||'').toLowerCase().includes(q)));return send(res,200,{deposits:records});}
-      if(p==='/api/admin/sweeps'&&method==='GET'){const q=String(url.searchParams.get('q')||'').toLowerCase();const records=(db.sweep_transactions||[]).filter(x=>!q||String(x.userId||'').toLowerCase().includes(q)||String(x.depositTxHash||'').toLowerCase().includes(q)||String(x.sweepTxHash||'').toLowerCase().includes(q)||String(x.toAddress||'').toLowerCase().includes(q));return send(res,200,{service:sweepServiceStatus(),sweeps:records});}
-      if(p.startsWith('/api/admin/sweeps/')&&p.endsWith('/retry')&&method==='POST'){const sweep=(db.sweep_transactions||[]).find(item=>item.id===p.split('/')[4]);try{retrySweep(db,sweep);writeDB(db);return send(res,200,{message:'Sweep retry queued',sweep});}catch(error){return send(res,400,{error:error.message});}}
+      if(p==='/api/admin/sweeps'&&method==='GET')return send(res,410,{error:'Treasury sweep flow is disabled for NOWPayments deposits'});
+      if(p.startsWith('/api/admin/sweeps/')&&p.endsWith('/retry')&&method==='POST')return send(res,410,{error:'Treasury sweep flow is disabled for NOWPayments deposits'});
       if(p==='/api/admin/settings'&&method==='PUT'){const input=await body(req); const allowed=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','hb9Price','fallbackPrice','priceOffset','spreadPercent','buyFeePercent','sellFeePercent','manualOverrideEnabled','minWithdrawal','withdrawalFeePercent','manualWithdrawalApproval','treasuryWalletBSC']; for(const k of allowed)if(input[k]!==undefined)db.settings[k]=input[k];db.settings.globalPointValue=0.02;delete db.settings.globalExtraPercent; const numeric=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','hb9Price','fallbackPrice','priceOffset','spreadPercent','buyFeePercent','sellFeePercent','minWithdrawal','withdrawalFeePercent']; if(!/^0x[a-fA-F0-9]{40}$/.test(String(db.settings.treasuryWalletBSC||'')))return send(res,400,{error:'Treasury wallet must be a valid EVM address'});if(numeric.some(k=>db.settings[k]!==undefined&&!Number.isFinite(Number(db.settings[k])))||db.settings.dailyRoi<1||db.settings.dailyRoi>4||db.settings.directMultiplier<1||db.settings.referralPercent<0||db.settings.referralPercent>100||db.settings.globalActivityMin<5||db.settings.globalActivityMax>15||db.settings.globalActivityMax<db.settings.globalActivityMin||Number(db.settings.fallbackPrice||db.settings.hb9Price)<=0||Number(db.settings.priceOffset)<0||db.settings.minWithdrawal<0||db.settings.withdrawalFeePercent<0||db.settings.withdrawalFeePercent>100)return send(res,400,{error:'Invalid settings. ROI must be 1-4%, referral percentage must be 0-100%, free Global Team must be 5-15, fallback price must be positive, and price offset must be non-negative.'}); numeric.forEach(k=>{if(db.settings[k]!==undefined)db.settings[k]=Number(db.settings[k])});if(input.fallbackPrice!==undefined||input.hb9Price!==undefined||input.priceOffset!==undefined||input.spreadPercent!==undefined||input.manualOverrideEnabled!==undefined||input.buyFeePercent!==undefined||input.sellFeePercent!==undefined){const result=setMarketSettings(db,{fallbackPrice:db.settings.fallbackPrice||db.settings.hb9Price,priceOffset:db.settings.priceOffset,spreadPercent:db.settings.spreadPercent,manualOverrideEnabled:db.settings.manualOverrideEnabled,buyFeePercent:db.settings.buyFeePercent,sellFeePercent:db.settings.sellFeePercent},u.id);if(result.error)return send(res,400,{error:result.error});}else db.settings.priceMode=marketSettings(db).manualOverrideEnabled?'manual_override':'icp_proxy';writeDB(db);return send(res,200,{message:'Settings saved',settings:{...db.settings,market:marketSettings(db)}});}
       if(p==='/api/admin/demo/reset'&&method==='POST'){return send(res,404,{error:'Route not found'});}
       if(p==='/api/admin/daily-income/run'&&method==='POST'){const summary=await processDaily(db);if(summary.usersProcessed===0)return send(res,409,{error:'Already processed today',summary});db.dailyRuns=(db.dailyRuns||[]);db.dailyRuns.push({id:id('run'),date:summary.date,adminId:u.id,adminName:u.name,...summary,createdAt:new Date().toISOString()});writeDB(db);return send(res,200,{message:'Daily income run completed',summary});}
@@ -1039,5 +1100,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(req.url==='/'||req.url==='/exchange')?'/index.html':decodeURIComponent(req.url);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f);res.writeHead(200,{'Content-Type':ext==='.html'?'text/html':ext==='.css'?'text/css':'application/javascript'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('RUNTIME_DEPOSIT_ADDRESSES',{dataFile:storage.dataFile,count:storage.depositAddressCount,targetAddress:storage.targetAddress,targetAddressExists:storage.targetAddressExists,targetMatches:storage.targetMatches});const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
+if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log(`HB9 Staking running at ${APP_URL}`);});
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson};
