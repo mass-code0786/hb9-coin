@@ -430,22 +430,38 @@ function resolveDepositWatcherStart({latestBlock,confirmations,state={},startBlo
   return {nextBlock:canResume?saved+1:defaultStart,cursorMode:'latest',configuredStartBlock:null,reset:false};
 }
 function watcherLogContext(log){
-  return {transactionHash:typeof log?.transactionHash==='string'?log.transactionHash:null,blockNumber:Number.isInteger(log?.blockNumber)?log.blockNumber:null,logIndex:Number.isInteger(log?.index)?log.index:null};
+  const logIndex=Number.isInteger(log?.index)?log.index:Number.isInteger(log?.logIndex)?log.logIndex:null;
+  return {transactionHash:typeof log?.transactionHash==='string'?log.transactionHash:null,blockNumber:Number.isInteger(log?.blockNumber)?log.blockNumber:null,logIndex,contractAddress:log?.address??log?.contractAddress??null};
+}
+function watcherConfiguredTokenAddress(){
+  try{return isAddress(process.env.USDT_BEP20_CONTRACT||'')?getAddress(process.env.USDT_BEP20_CONTRACT):null;}catch(_){return null;}
+}
+function watcherReject(log,reason,extra={}){
+  console.warn('WATCHER_TRANSFER_REJECTED',{reason,...watcherLogContext(log),...extra});
+  return {reason};
 }
 function parseBep20TransferWatcherLog(log){
-  if(!log||typeof log!=='object')return {reason:'log is not an object'};
-  if(!Array.isArray(log.topics)||log.topics.length<3)return {reason:'Transfer log must contain at least three topics'};
-  if(String(log.topics[0]).toLowerCase()!==TRANSFER_TOPIC.toLowerCase())return {reason:'topic0 is not the ERC20 Transfer signature'};
-  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.data||'')))return {reason:'data is not a 32-byte hexadecimal amount'};
-  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[1]))||!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[2])))return {reason:'from or to topic is not a 32-byte hexadecimal value'};
-  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.transactionHash||'')))return {reason:'transaction hash is invalid'};
-  if(!Number.isInteger(log.index)||log.index<0)return {reason:'log index is invalid'};
-  if(!Number.isInteger(log.blockNumber)||log.blockNumber<0)return {reason:'block number is invalid'};
+  if(!log||typeof log!=='object')return watcherReject(log,'log is not an object');
+  const contractAddress=log.address??log.contractAddress,configuredToken=watcherConfiguredTokenAddress();
+  if(configuredToken){
+    if(!isAddress(contractAddress||''))return watcherReject(log,'contract address is missing or invalid',{expectedContract:configuredToken});
+    if(getAddress(contractAddress)!==configuredToken)return watcherReject(log,'contract address does not match USDT_BEP20_CONTRACT',{expectedContract:configuredToken,actualContract:getAddress(contractAddress)});
+  }
+  if(!Array.isArray(log.topics)||log.topics.length<3)return watcherReject(log,'Transfer log must contain at least three topics');
+  if(String(log.topics[0]).toLowerCase()!==TRANSFER_TOPIC.toLowerCase())return watcherReject(log,'topic0 is not the ERC20 Transfer signature');
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.data||'')))return watcherReject(log,'data is not a 32-byte hexadecimal amount');
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[1]))||!/^0x[0-9a-fA-F]{64}$/.test(String(log.topics[2])))return watcherReject(log,'from or to topic is not a 32-byte hexadecimal value');
+  if(!/^0x[0-9a-fA-F]{64}$/.test(String(log.transactionHash||'')))return watcherReject(log,'transaction hash is invalid');
+  const logIndex=Number.isInteger(log.index)?log.index:Number.isInteger(log.logIndex)?log.logIndex:null;
+  if(!Number.isInteger(logIndex)||logIndex<0)return watcherReject(log,'log index is invalid');
+  if(!Number.isInteger(log.blockNumber)||log.blockNumber<0)return watcherReject(log,'block number is invalid');
   try{
-    return {event:{chain:BSC_CHAIN,txHash:log.transactionHash,logIndex:log.index,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(BigInt(log.data),USDT_BEP20_DECIMALS)),contractAddress:log.address??null,topics:log.topics,data:log.data}};
-  }catch(error){return {reason:`unable to decode Transfer log: ${error.message}`};}
+    const rawAmount=BigInt(log.data),event={chain:BSC_CHAIN,txHash:log.transactionHash.toLowerCase(),logIndex,blockNumber:log.blockNumber,fromAddress:getAddress(`0x${String(log.topics[1]).slice(-40)}`),toAddress:getAddress(`0x${String(log.topics[2]).slice(-40)}`),amount:Number(formatUnits(rawAmount,USDT_BEP20_DECIMALS)),rawAmount:rawAmount.toString(),contractAddress:contractAddress?getAddress(contractAddress):null,topics:log.topics,data:log.data};
+    console.log('WATCHER_TRANSFER_DECODED',{txHash:event.txHash,logIndex:event.logIndex,fromAddress:event.fromAddress,toAddress:event.toAddress,amount:event.amount,rawAmount:event.rawAmount,contractAddress:event.contractAddress});
+    return {event};
+  }catch(error){return watcherReject(log,`unable to decode Transfer log: ${error.message}`);}
 }
-function warnRejectedDepositWatcherLog(log,reason){console.warn('Deposit watcher rejected log:',{reason,...watcherLogContext(log)});}
+function warnRejectedDepositWatcherLog(log,reason){console.warn('WATCHER_TRANSFER_REJECTED',{reason,...watcherLogContext(log)});}
 function sweepServiceStatus(){
   const missing=[];
   if(process.env.SWEEP_ENABLED!=='true')missing.push('SWEEP_ENABLED=true');
@@ -628,15 +644,26 @@ function repairBep20RawUnitAmounts(db){
 function recordBep20Transfer(db,input){
   const chain=normalizeChain(input.chain), txHash=String(input.txHash||'').trim().toLowerCase(), logIndex=Number(input.logIndex), toAddress=String(input.toAddress||'').trim().toLowerCase(), fromAddress=String(input.fromAddress||input.from||'').trim().toLowerCase(), amount=Number(input.amount), blockNumber=Number(input.blockNumber), requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
   const failures=validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber});
+  const configuredToken=watcherConfiguredTokenAddress();
+  if(configuredToken&&input.contractAddress){
+    try{if(getAddress(input.contractAddress)!==configuredToken)failures.push('contractAddress does not match USDT_BEP20_CONTRACT');}catch(_){failures.push('contractAddress is invalid');}
+  }
   if(failures.length){
-    console.warn('Invalid BEP20 transfer event:',{failures,topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
+    console.warn('WATCHER_TRANSFER_REJECTED',{reason:'invalid BEP20 transfer event',failures,topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
     throw Error('Invalid BEP20 transfer event');
   }
   if(isZeroValueBep20Transfer(amount)){
-    console.debug('Skipping zero-value Transfer event',{topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
+    console.warn('WATCHER_TRANSFER_REJECTED',{reason:'zero-value Transfer event',topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
     return null;
   }
-  const address=(db.deposit_addresses||[]).find(x=>x.chain===chain&&x.address.toLowerCase()===toAddress&&isActiveVerifiedDepositAddress(x));
+  const addressRecord=(db.deposit_addresses||[]).find(x=>x.chain===chain&&String(x.address||'').toLowerCase()===toAddress);
+  if(addressRecord&&!isActiveVerifiedDepositAddress(addressRecord)){
+    console.warn('WATCHER_TRANSFER_REJECTED',{reason:'deposit address is disabled or not signerVerified',toAddress:getAddress(toAddress),depositAddressId:addressRecord.id,disabled:Boolean(addressRecord.disabled),signerVerified:addressRecord.signerVerified===true,txHash,logIndex,amount});
+    return null;
+  }
+  const address=addressRecord&&isActiveVerifiedDepositAddress(addressRecord)?addressRecord:null;
+  if(address)console.log('WATCHER_DEPOSIT_ADDRESS_MATCHED',{txHash,logIndex,userId:address.userId,depositAddressId:address.id,toAddress:address.address,amount});
+  else console.warn('WATCHER_TRANSFER_REJECTED',{reason:'recipient is not an active signerVerified deposit address',toAddress:isAddress(toAddress)?getAddress(toAddress):toAddress,txHash,logIndex,amount});
   if(!address)return null;
   db.blockchain_transactions=db.blockchain_transactions||[];db.deposits=db.deposits||[];
   const eventKey=`${chain}:${txHash}:${logIndex}`,now=new Date().toISOString();
@@ -646,6 +673,7 @@ function recordBep20Transfer(db,input){
     db.blockchain_transactions.push(tx);
     const deposit={id:id('dep'),userId:address.userId,amount,asset:'USDT',chain,network:'USDT BEP20',txHash,logIndex,fromAddress:tx.fromAddress,depositAddressId:address.id,status:'detected',confirmations:0,requiredConfirmations,blockNumber,createdAt:now};
     db.deposits.push(deposit);
+    console.log('BEP20_DEPOSIT_DETECTED',{eventKey,txHash,logIndex,userId:address.userId,toAddress:address.address,amount,blockNumber});
     audit(db,'BEP20_DEPOSIT_DETECTED',{eventKey,txHash,logIndex,userId:address.userId,toAddress:address.address,amount,blockNumber});
   }
   return tx;
@@ -894,4 +922,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
+module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
