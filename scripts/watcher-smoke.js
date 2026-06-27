@@ -73,8 +73,10 @@ const liveLookbackDb = { deposit_addresses: [{ id: 'addr_live', userId: 'usr_liv
 const liveLookbackLog = { ...targetLog, blockNumber: 1070 };
 const liveFirst = processDepositWatcherLogs(liveLookbackDb, [liveLookbackLog], 1100, targetTxHash);
 assert(liveFirst.decoded === 1 && liveLookbackDb.deposits.length === 1 && liveLookbackDb.wallet_ledger.length === 1 && liveLookbackDb.deposits[0].status === 'credited', 'Cursor-ahead live lookback scan must detect and credit a confirmed deposit inside the lookback window');
+assert((liveLookbackDb.sweep_transactions || []).length === 1, 'Credited live deposit must create exactly one sweep candidate');
 processDepositWatcherLogs(liveLookbackDb, [liveLookbackLog], 1100, targetTxHash);
 assert(liveLookbackDb.deposits.length === 1 && liveLookbackDb.wallet_ledger.length === 1, 'Second live lookback scan must not duplicate deposit or credit');
+assert((liveLookbackDb.sweep_transactions || []).length === 1, 'Second live lookback scan must not duplicate sweep candidate');
 
 const legacyDb = { auditLogs: [], blockchain_transactions: [{ id: 'tx_legacy', eventKey: 'BSC:legacy:0', chain: 'BSC', amount: 1000000000000000000 }], deposits: [{ id: 'dep_legacy', chain: 'BSC', amount: 1000000000000000000, creditedAmount: 1000000000000000000 }], wallet_ledger: [{ asset: 'USDT', reason: 'BEP20 deposit credited', refId: 'BSC:legacy:0', amount: 1000000000000000000 }], sweep_transactions: [{ id: 'swp_legacy', depositId: 'dep_legacy', amount: 1000000000000000000 }], reserve_ledger: [{ asset: 'USDT', walletType: 'treasury', direction: 'credit', refId: 'swp_legacy', amount: 1000000000000000000 }], reserve_wallets: [{ asset: 'USDT', walletType: 'treasury', balance: 1000000000000000000 }] };
 assert(repairBep20RawUnitAmounts(legacyDb).corrected, 'Legacy raw-unit records must be repaired');

@@ -1,10 +1,9 @@
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const { getAddress } = require('ethers');
+const { dataFile } = require('../server');
 
 const TARGET_TX_HASH = '0x7e48bbba885ab4c786d6d20305b5e93f7f16baf5a903f2a754bff246425bb114';
-const dataFile = path.resolve(process.env.DATA_FILE || './data/db.json');
 const now = new Date().toISOString();
 const id = prefix => `${prefix}_${crypto.randomUUID()}`;
 const matchesHash = value => String(value || '').toLowerCase() === TARGET_TX_HASH;

@@ -6,7 +6,12 @@ const crypto = require('crypto');
 const { HDNodeWallet, Interface, JsonRpcProvider, Wallet, Contract, getAddress, isAddress, formatUnits, parseUnits, parseEther } = require('ethers');
 
 const PORT = Number(process.env.PORT || 3000);
-const DATA = path.resolve(process.env.DATA_FILE || './data/db.json');
+function resolveDataFile(value = process.env.DATA_FILE) {
+  const configured = String(value || '').trim();
+  if (!configured) return path.join(__dirname, 'data', 'db.json');
+  return path.isAbsolute(configured) ? configured : path.resolve(__dirname, configured);
+}
+const DATA = resolveDataFile();
 const PUBLIC = path.join(__dirname, 'public');
 const APP_URL = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://coin.hb9.live' : `http://localhost:${PORT}`);
 const PRODUCTION_DOMAIN = /^https:\/\/coin\.hb9\.live\/?$/i.test(APP_URL);
@@ -49,6 +54,22 @@ const hash = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ sal
 const check = (password, user) => crypto.timingSafeEqual(Buffer.from(hash(password, user.salt).hash, 'hex'), Buffer.from(user.passwordHash, 'hex'));
 function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); if(repairBep20RawUnitAmounts(db).corrected)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
+function normalizeRuntimeAddress(address){try{const value=String(address||'').trim();return isAddress(value)?getAddress(value).toLowerCase():null;}catch(_){return null;}}
+function runtimeStorageDiagnostics(db=readDB()){
+  const target='0xE0C9e2843f53b79A7C0632116f805a26061DADaA';
+  const normalizedTarget=normalizeRuntimeAddress(target);
+  const rows=(db.deposit_addresses||[]).filter(item=>normalizeRuntimeAddress(item.address)===normalizedTarget);
+  return {
+    dataFile:DATA,
+    envDataFile:process.env.DATA_FILE||null,
+    cwd:process.cwd(),
+    appDir:__dirname,
+    depositAddressCount:(db.deposit_addresses||[]).length,
+    targetAddress:target,
+    targetAddressExists:rows.length>0,
+    targetMatches:rows.map(item=>({id:item.id,userId:item.userId,chain:item.chain,address:item.address,disabled:Boolean(item.disabled),signerVerified:item.signerVerified===true,hdIndex:item.hdIndex,walletIndex:item.walletIndex}))
+  };
+}
 function initializeDB(){ DEV_ONLY_DEMO ? seedDevOnlyDemo() : seedProductionEmpty(); }
 function baseSettings(){
   return {dailyRoi:2,directMultiplier:2,referralPercent:10,globalActivityMin:5,globalActivityMax:15,globalPointValue:0.02,hb9Price:0.2,priceMode:'icp_proxy',exchangeEnabled:true,tradingFeePercent:0,buyFeePercent:0,sellFeePercent:0,fallbackPrice:0.2,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,minWithdrawal:20,withdrawalFeePercent:5,minHb9Transfer:1,hb9TransferFeePercent:0,manualWithdrawalApproval:true,treasuryWalletBSC:process.env.TREASURY_WALLET_BSC||''};
@@ -1018,5 +1039,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(req.url==='/'||req.url==='/exchange')?'/index.html':decodeURIComponent(req.url);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f);res.writeHead(200,{'Content-Type':ext==='.html'?'text/html':ext==='.css'?'text/css':'application/javascript'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,()=>{const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
+if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('RUNTIME_DEPOSIT_ADDRESSES',{dataFile:storage.dataFile,count:storage.depositAddressCount,targetAddress:storage.targetAddress,targetAddressExists:storage.targetAddressExists,targetMatches:storage.targetMatches});const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};

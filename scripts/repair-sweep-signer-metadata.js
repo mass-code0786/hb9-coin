@@ -1,8 +1,8 @@
 try { require('dotenv').config(); } catch (_) {}
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const {
+  dataFile,
   depositDerivationPath,
   depositSignerDiagnostics,
   derivedDepositAddress,
@@ -13,7 +13,6 @@ const {
 
 const TARGET_TX_HASH = '0x7e48bbba885ab4c786d6d20305b5e93f7f16baf5a903f2a754bff246425bb114';
 const TARGET_DEPOSIT_ADDRESS = '0xeb513f05b51fbe4c4acedef60ae9ef1ee8f694c7a';
-const dataFile = path.resolve(process.env.DATA_FILE || './data/db.json');
 const now = new Date().toISOString();
 const id = prefix => `${prefix}_${crypto.randomUUID()}`;
 const matchesHash = value => String(value || '').toLowerCase() === TARGET_TX_HASH;

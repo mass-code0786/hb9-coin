@@ -1,8 +1,6 @@
 const fs = require('fs');
-const path = require('path');
-const { repairBep20RawUnitAmounts } = require('../server');
+const { dataFile, repairBep20RawUnitAmounts } = require('../server');
 
-const dataFile = path.resolve(process.env.DATA_FILE || './data/db.json');
 if (!fs.existsSync(dataFile)) throw Error(`Database file not found: ${dataFile}`);
 const db = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
 const result = repairBep20RawUnitAmounts(db);

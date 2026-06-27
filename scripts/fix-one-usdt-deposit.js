@@ -1,9 +1,8 @@
 const fs = require('fs');
-const path = require('path');
+const { dataFile } = require('../server');
 
 const TARGET_TX_HASH = '0x7e48bbba885ab4c786d6d20305b5e93f7f16baf5a903f2a754bff246425bb114';
 const FIXED_AMOUNT = 1;
-const dataFile = path.resolve(process.env.DATA_FILE || './data/db.json');
 
 if (!fs.existsSync(dataFile)) throw Error(`Database file not found: ${dataFile}`);
 const db = JSON.parse(fs.readFileSync(dataFile, 'utf8'));

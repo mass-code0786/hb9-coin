@@ -1,14 +1,13 @@
 try { require('dotenv').config(); } catch (_) {}
 const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const { HDNodeWallet, getAddress } = require('ethers');
+const { dataFile: DATA_FILE } = require('../server');
 
 const DEFAULT_TX_HASH = '0x7e48bbba885ab4c786d6d20305b5e93f7f16baf5a903f2a754bff246425bb114';
 const DEFAULT_EXPECTED_DEPOSIT_ADDRESS = '0xeb513f05b51fbe4c4acedef60ae9ef1ee8f694c7a';
 const TARGET_TX_HASH = String(process.env.TX_HASH || DEFAULT_TX_HASH).toLowerCase();
 const EXPECTED_DEPOSIT_ADDRESS = String(process.env.EXPECTED_DEPOSIT_ADDRESS || DEFAULT_EXPECTED_DEPOSIT_ADDRESS).toLowerCase();
-const DATA_FILE = path.resolve(process.env.DATA_FILE || './data/db.json');
 const DEFAULT_HD_PATH = "m/44'/60'/0'/0";
 
 const sha256 = value => crypto.createHash('sha256').update(String(value || '')).digest('hex');

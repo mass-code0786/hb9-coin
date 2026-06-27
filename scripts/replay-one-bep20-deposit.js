@@ -1,9 +1,9 @@
 try { require('dotenv').config(); } catch (_) { /* .env is optional */ }
 
 const fs = require('fs');
-const path = require('path');
 const { JsonRpcProvider, getAddress } = require('ethers');
 const {
+  dataFile,
   parseBep20TransferWatcherLog,
   recordBep20Transfer,
   updateDepositConfirmations
@@ -26,7 +26,6 @@ function eventKeyFor(event) {
 async function main() {
   assertConfig();
 
-  const dataFile = path.resolve(process.env.DATA_FILE || './data/db.json');
   if (!fs.existsSync(dataFile)) throw Error(`Database file not found: ${dataFile}`);
 
   const provider = new JsonRpcProvider(process.env.BSC_RPC_URL);
