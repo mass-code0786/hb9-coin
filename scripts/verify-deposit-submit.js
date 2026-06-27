@@ -12,6 +12,7 @@ const screenshotFile = path.join(__dirname, '..', 'artifacts', 'treasury-sweep-m
 const TEST_MNEMONIC = 'test test test test test test test test test test test junk';
 const TEST_HD_PATH = "m/44'/60'/0'/0";
 const TEST_XPUB = HDNodeWallet.fromPhrase(TEST_MNEMONIC, '', TEST_HD_PATH).neuter().extendedKey;
+const TEST_XPRV = HDNodeWallet.fromPhrase(TEST_MNEMONIC, '', TEST_HD_PATH).extendedKey;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function request(method, url, body, token) {
@@ -97,7 +98,7 @@ async function newPage() {
 async function main() {
   const server = spawn(process.execPath, ['server.js'], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, HD_WALLET_MNEMONIC: TEST_MNEMONIC, HD_WALLET_DERIVATION_PATH: TEST_HD_PATH, BSC_RPC_URL: 'http://127.0.0.1:1', USDT_BEP20_CONTRACT: '0x55d398326f99059ff775485246999027b3197955', TREASURY_WALLET_BSC: '0x9999999999999999999999999999999999999999', DEPOSIT_WATCHER_ENABLED: 'true' },
+    env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, HD_WALLET_XPRV: TEST_XPRV, HD_WALLET_MNEMONIC: TEST_MNEMONIC, HD_WALLET_DERIVATION_PATH: TEST_HD_PATH, BSC_RPC_URL: 'http://127.0.0.1:1', USDT_BEP20_CONTRACT: '0x55d398326f99059ff775485246999027b3197955', TREASURY_WALLET_BSC: '0x9999999999999999999999999999999999999999', DEPOSIT_WATCHER_ENABLED: 'true' },
     stdio: 'ignore'
   });
   let chrome;

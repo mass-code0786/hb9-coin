@@ -8,7 +8,9 @@
     "start": "node server.js",
     "seed": "node scripts/seed.js",
     "derive:xpub": "node scripts/derive-xpub.js",
+    "migrate:deposit-address-safety": "node scripts/migrate-deposit-address-safety.js",
     "smoke": "node scripts/smoke.js",
+    "smoke:hd-signer": "node scripts/hd-sweep-signer-smoke.js",
     "smoke:watcher": "node scripts/watcher-smoke.js"
   },
   "engines": {

@@ -14,6 +14,7 @@ const DEV_ONLY_DEMO = process.env.NODE_ENV !== 'production' && process.env.DEMO_
 const DEMO_MODE = DEV_ONLY_DEMO;
 const BSC_CHAIN = 'BSC';
 const DEFAULT_HD_DERIVATION_PATH = "m/44'/60'/0'/0";
+const BLOCKED_UNSAFE_DEPOSIT_ADDRESSES = new Set(['0xeb513f05b51fbe4c4acedef60ae9ef1ee8f694c7a']);
 const USDT_BEP20_DECIMALS = 18;
 const RAW_USDT_MIGRATION_THRESHOLD = 1000000000;
 const USDT_BEP20_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
@@ -361,6 +362,7 @@ function deterministicInt(seed, min, max) {
   return low+(seedNum%span);
 }
 function audit(db,type,details){db.auditLogs=db.auditLogs||[];db.auditLogs.push({id:id('aud'),type,details,createdAt:new Date().toISOString()});}
+function emitDepositAddressLog(db,type,details){console.warn(type,details);audit(db,type,details);}
 function normalizeChain(chain){return String(chain||'BSC').trim().toUpperCase();}
 function nextHdIndex(db,chain){return (db.deposit_addresses||[]).filter(x=>x.chain===chain).reduce((max,x)=>Math.max(max,Number(x.hdIndex)||0),-1)+1;}
 function hdBaseDerivationPath(){return String(process.env.HD_WALLET_DERIVATION_PATH||DEFAULT_HD_DERIVATION_PATH).trim()||DEFAULT_HD_DERIVATION_PATH;}
@@ -368,21 +370,30 @@ function depositDerivationPath(index,basePath=hdBaseDerivationPath()){return `${
 function hdFingerprint(value=process.env.HD_WALLET_XPUB||''){return value?crypto.createHash('sha256').update(String(value)).digest('hex').slice(0,16):null;}
 function configuredDepositXpub(){return HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB);}
 function configuredHdSignerSource(){return process.env.HD_WALLET_MNEMONIC?'HD_WALLET_MNEMONIC':process.env.HD_WALLET_XPRV?'HD_WALLET_XPRV':null;}
+function currentHdWalletIndexAddress(index=0){
+  const walletIndex=Number(index);
+  return {
+    mnemonic:getAddress(HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',depositDerivationPath(walletIndex)).address),
+    xpub:getAddress(HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPUB).deriveChild(walletIndex).address),
+    xprv:getAddress(HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPRV).deriveChild(walletIndex).address)
+  };
+}
 function expectedXpubFromSigner(){
   if(process.env.HD_WALLET_MNEMONIC)return HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',hdBaseDerivationPath()).neuter().extendedKey;
   if(process.env.HD_WALLET_XPRV)return HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPRV).neuter().extendedKey;
   return null;
 }
 function hdWalletConsistencyStatus(){
-  if(!process.env.HD_WALLET_XPUB)return {configured:false,error:'HD_WALLET_XPUB is not configured'};
-  try{configuredDepositXpub().deriveChild(0);}catch(error){return {configured:false,error:`HD_WALLET_XPUB is invalid: ${error.message}`};}
-  if(configuredHdSignerSource()){
-    try{
-      const expected=expectedXpubFromSigner();
-      if(expected!==process.env.HD_WALLET_XPUB)return {configured:false,error:`HD_WALLET_XPUB does not match ${configuredHdSignerSource()} at HD_WALLET_DERIVATION_PATH`,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:configuredHdSignerSource()};
-    }catch(error){return {configured:false,error:`${configuredHdSignerSource()} or HD_WALLET_DERIVATION_PATH is invalid: ${error.message}`};}
-  }
-  return {configured:true,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:configuredHdSignerSource()};
+  const missing=['HD_WALLET_MNEMONIC','HD_WALLET_XPUB','HD_WALLET_XPRV','HD_WALLET_DERIVATION_PATH'].filter(name=>!String(process.env[name]||'').trim());
+  if(missing.length)return {configured:false,error:`Missing HD wallet configuration: ${missing.join(', ')}`,missing};
+  try{
+    const addresses=currentHdWalletIndexAddress(0),unique=new Set(Object.values(addresses).map(x=>x.toLowerCase()));
+    if(unique.size!==1)return {configured:false,error:'HD_WALLET_MNEMONIC, HD_WALLET_XPUB, HD_WALLET_XPRV, and HD_WALLET_DERIVATION_PATH do not derive the same address at index 0',addresses,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};
+    const expected=HDNodeWallet.fromPhrase(process.env.HD_WALLET_MNEMONIC,'',hdBaseDerivationPath()).neuter().extendedKey;
+    if(expected!==process.env.HD_WALLET_XPUB)return {configured:false,error:'HD_WALLET_XPUB does not match HD_WALLET_MNEMONIC at HD_WALLET_DERIVATION_PATH',addresses,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};
+    if(HDNodeWallet.fromExtendedKey(process.env.HD_WALLET_XPRV).neuter().extendedKey!==process.env.HD_WALLET_XPUB)return {configured:false,error:'HD_WALLET_XPRV does not match HD_WALLET_XPUB at HD_WALLET_DERIVATION_PATH',addresses,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};
+    return {configured:true,address0:addresses.mnemonic,addresses,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};
+  }catch(error){return {configured:false,error:`HD wallet configuration is invalid: ${error.message}`,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};}
 }
 function depositServiceStatus(){
   const missing=[];
@@ -396,7 +407,6 @@ function depositServiceStatus(){
 }
 function depositAddressServiceStatus(){
   const status=hdWalletConsistencyStatus();
-  if(status.configured&&!configuredHdSignerSource())return {configured:false,error:'HD_WALLET_MNEMONIC or HD_WALLET_XPRV is required so generated deposit addresses are sweepable'};
   return status.configured?status:{configured:false,error:status.error||'Deposit address service is not configured'};
 }
 function positiveEnvNumber(name,defaultValue){const value=Number(process.env[name]??defaultValue);return Number.isFinite(value)&&value>0?value:null;}
@@ -486,17 +496,80 @@ function derivedDepositAddress(chain,index){
   if(!status.configured)throw Error(status.error);
   return getAddress(configuredDepositXpub().deriveChild(index).address);
 }
+function addressIsBlockedUnsafe(address){return BLOCKED_UNSAFE_DEPOSIT_ADDRESSES.has(String(address||'').toLowerCase());}
+function isActiveVerifiedDepositAddress(record){
+  return Boolean(record&&!record.disabled&&record.signerVerified===true&&!addressIsBlockedUnsafe(record.address));
+}
+function signerControlsDepositAddress(record){
+  if(!record||addressIsBlockedUnsafe(record.address))return false;
+  try{
+    const result=depositSignerDiagnostics(record);
+    return Boolean(result.signer&&result.diagnostics.derivedSignerAddress===result.diagnostics.expectedDepositAddress&&result.diagnostics.hdFingerprint===hdFingerprint());
+  }catch(_){return false;}
+}
+function disableUnsafeDepositAddress(db,record,reason='not controlled by current HD wallet'){
+  if(!record||record.disabled&&record.unsafeReason===reason)return false;
+  const now=new Date().toISOString();
+  Object.assign(record,{disabled:true,signerVerified:false,unsafeReason:reason,disabledAt:record.disabledAt||now,updatedAt:now});
+  emitDepositAddressLog(db,'DEPOSIT_ADDRESS_DISABLED_UNSAFE',{userId:record.userId,chain:record.chain,address:record.address,hdIndex:record.hdIndex,reason});
+  return true;
+}
+function verifyExistingDepositAddress(db,record){
+  const walletIndex=Number(record.walletIndex ?? record.hdIndex);
+  const basePath=hdBaseDerivationPath(),now=new Date().toISOString();
+  Object.assign(record,{hdIndex:walletIndex,walletIndex,hdBasePath:basePath,derivationPath:depositDerivationPath(walletIndex,basePath),hdFingerprint:hdFingerprint(),signerVerified:true,disabled:false,unsafeReason:null,updatedAt:now});
+  delete record.disabledAt;
+  emitDepositAddressLog(db,'DEPOSIT_ADDRESS_VERIFIED',{userId:record.userId,chain:record.chain,address:record.address,hdIndex:walletIndex,walletIndex,derivationPath:record.derivationPath,hdFingerprint:record.hdFingerprint,existing:true});
+  return record;
+}
+function nextSafeHdIndex(db,chain){
+  let hdIndex=nextHdIndex(db,chain);
+  while(addressIsBlockedUnsafe(derivedDepositAddress(chain,hdIndex))||db.deposit_addresses.some(x=>x.chain===chain&&String(x.address||'').toLowerCase()===derivedDepositAddress(chain,hdIndex).toLowerCase()))hdIndex++;
+  return hdIndex;
+}
+function createVerifiedDepositAddress(db,userId,chain,replacedAddress=null){
+  const hdIndex=nextSafeHdIndex(db,chain), createdAt=new Date().toISOString(),basePath=hdBaseDerivationPath(),address=derivedDepositAddress(chain,hdIndex);
+  const record={id:id('addr'),userId,chain,address,hdIndex,walletIndex:hdIndex,hdBasePath:basePath,derivationPath:depositDerivationPath(hdIndex,basePath),hdFingerprint:hdFingerprint(),signerVerified:true,createdAt};
+  if(!signerControlsDepositAddress(record))throw Error('Generated deposit address is not controlled by current HD wallet signer');
+  db.deposit_addresses.push(record);
+  emitDepositAddressLog(db,'DEPOSIT_ADDRESS_VERIFIED',{userId,chain,address:record.address,hdIndex,walletIndex:hdIndex,derivationPath:record.derivationPath,hdFingerprint:record.hdFingerprint});
+  if(replacedAddress)emitDepositAddressLog(db,'DEPOSIT_ADDRESS_REPLACED',{userId,chain,oldAddress:replacedAddress.address,newAddress:record.address,oldAddressId:replacedAddress.id,newAddressId:record.id,reason:replacedAddress.unsafeReason||'not controlled by current HD wallet'});
+  return record;
+}
 function ensureDepositAddress(db,userId,chainInput='BSC'){
   const chain=normalizeChain(chainInput);
   db.deposit_addresses=db.deposit_addresses||[];
-  const existing=db.deposit_addresses.find(x=>x.userId===userId&&x.chain===chain);
+  const existing=db.deposit_addresses.find(x=>x.userId===userId&&x.chain===chain&&isActiveVerifiedDepositAddress(x)&&signerControlsDepositAddress(x));
   if(existing)return existing;
-  const hdIndex=nextHdIndex(db,chain), createdAt=new Date().toISOString();
-  const basePath=hdBaseDerivationPath(),record={id:id('addr'),userId,chain,address:derivedDepositAddress(chain,hdIndex),hdIndex,hdBasePath:basePath,derivationPath:depositDerivationPath(hdIndex,basePath),hdFingerprint:hdFingerprint(),createdAt};
-  if(db.deposit_addresses.some(x=>x.chain===chain&&x.address.toLowerCase()===record.address.toLowerCase()))throw Error('Derived deposit address collision');
-  db.deposit_addresses.push(record);
-  audit(db,'DEPOSIT_ADDRESS_CREATED',{userId,chain,address:record.address,hdIndex});
-  return record;
+  const controlledLegacy=db.deposit_addresses.find(x=>x.userId===userId&&x.chain===chain&&!x.disabled&&signerControlsDepositAddress(x));
+  if(controlledLegacy)return verifyExistingDepositAddress(db,controlledLegacy);
+  let replaced=null;
+  for(const record of db.deposit_addresses.filter(x=>x.userId===userId&&x.chain===chain)){
+    if(!signerControlsDepositAddress(record)){disableUnsafeDepositAddress(db,record,addressIsBlockedUnsafe(record.address)?'blocked unsafe legacy address':'not controlled by current HD wallet');replaced=replaced||record;}
+  }
+  return createVerifiedDepositAddress(db,userId,chain,replaced);
+}
+function migrateUnsafeDepositAddresses(db){
+  const status=depositAddressServiceStatus();
+  if(!status.configured)throw Error(status.error);
+  db.deposit_addresses=db.deposit_addresses||[];
+  const affected=new Map();
+  for(const record of db.deposit_addresses){
+    if(!record.userId||normalizeChain(record.chain)!==BSC_CHAIN)continue;
+    if(signerControlsDepositAddress(record)){
+      if(!record.disabled)verifyExistingDepositAddress(db,record);
+      continue;
+    }
+    disableUnsafeDepositAddress(db,record,addressIsBlockedUnsafe(record.address)?'blocked unsafe legacy address':'not controlled by current HD wallet');
+    affected.set(`${record.userId}:${record.chain}`,{userId:record.userId,chain:record.chain,record});
+  }
+  const replacements=[];
+  for(const item of affected.values()){
+    const active=db.deposit_addresses.find(x=>x.userId===item.userId&&x.chain===item.chain&&isActiveVerifiedDepositAddress(x)&&signerControlsDepositAddress(x));
+    if(active)continue;
+    replacements.push(createVerifiedDepositAddress(db,item.userId,normalizeChain(item.chain),item.record));
+  }
+  return {scanned:db.deposit_addresses.length,affectedUsers:affected.size,replacements:replacements.length};
 }
 function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress,amount,blockNumber}){
   const failures=[];
@@ -563,7 +636,7 @@ function recordBep20Transfer(db,input){
     console.debug('Skipping zero-value Transfer event',{topics:input.topics??null,data:input.data??null,from:fromAddress,to:toAddress,amount,contractAddress:input.contractAddress??null,transactionHash:txHash,logIndex,blockNumber});
     return null;
   }
-  const address=(db.deposit_addresses||[]).find(x=>x.chain===chain&&x.address.toLowerCase()===toAddress);
+  const address=(db.deposit_addresses||[]).find(x=>x.chain===chain&&x.address.toLowerCase()===toAddress&&isActiveVerifiedDepositAddress(x));
   if(!address)return null;
   db.blockchain_transactions=db.blockchain_transactions||[];db.deposits=db.deposits||[];
   const eventKey=`${chain}:${txHash}:${logIndex}`,now=new Date().toISOString();
@@ -820,5 +893,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(req.url==='/'||req.url==='/exchange')?'/index.html':decodeURIComponent(req.url);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f);res.writeHead(200,{'Content-Type':ext==='.html'?'text/html':ext==='.css'?'text/css':'application/javascript'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,()=>{console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus};
+if(require.main===module)server.listen(PORT,()=>{const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
+module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
