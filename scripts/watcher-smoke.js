@@ -1,6 +1,7 @@
 process.env.USDT_BEP20_CONTRACT = '0x55d398326f99059ff775485246999027b3197955';
+process.env.TREASURY_WALLET_BSC = '0x9999999999999999999999999999999999999999';
 
-const { isZeroValueBep20Transfer, parseBep20TransferWatcherLog, recordBep20Transfer, repairBep20RawUnitAmounts, resolveDepositWatcherStart, validateBep20TransferEvent } = require('../server');
+const { isZeroValueBep20Transfer, parseBep20TransferWatcherLog, processDepositWatcherLogs, recordBep20Transfer, repairBep20RawUnitAmounts, resolveDepositWatcherLiveScanRange, resolveDepositWatcherStart, validateBep20TransferEvent } = require('../server');
 
 function assert(condition, message) { if (!condition) throw Error(message); }
 
@@ -20,6 +21,9 @@ assert(resumed.nextBlock === 998, 'A current automatic cursor must continue forw
 
 const reset = resolveDepositWatcherStart({ ...base, startBlock: '500', resetCursor: true, state: { cursorMode: 'configured', lastProcessedBlock: 500 } });
 assert(reset.reset && reset.nextBlock === 1000, 'Reset must position the cursor at the latest block');
+
+const cursorAheadRange = resolveDepositWatcherLiveScanRange({ latestBlock: 1100, confirmations: 12, lookbackBlocks: 50, state: { cursorMode: 'latest', lastProcessedBlock: 1095 } });
+assert(cursorAheadRange.nextBlock === 1050 && cursorAheadRange.toBlock === 1088 && cursorAheadRange.cursorNextBlock === 1096, 'Live watcher must scan from lookback start when cursor is ahead of confirmed deposit block');
 
 const validLog = { address: process.env.USDT_BEP20_CONTRACT, topics: ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', `0x${'0'.repeat(24)}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`, `0x${'0'.repeat(24)}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`], data: `0x${'0'.repeat(63)}1`, transactionHash: `0x${'c'.repeat(64)}`, index: 0, blockNumber: 1000 };
 assert(parseBep20TransferWatcherLog(validLog).event?.amount === 0.000000000000000001, 'A valid Transfer log must be decoded using 18 decimals');
@@ -64,6 +68,13 @@ assert(recordBep20Transfer(inactiveDb, decodedTarget) === null && inactiveDb.dep
 const normalizedLookupDb = { deposit_addresses: [{ id: 'addr_normalized', userId: 'usr_normalized', chain: ' bsc ', address: ` ${targetAddress.toLowerCase()} `, signerVerified: true, disabled: false }], blockchain_transactions: [], deposits: [], auditLogs: [] };
 recordBep20Transfer(normalizedLookupDb, decodedTarget);
 assert(normalizedLookupDb.deposits.length === 1 && normalizedLookupDb.deposits[0].depositAddressId === 'addr_normalized', 'Deposit lookup must normalize DB chain/address before matching decoded recipient');
+
+const liveLookbackDb = { deposit_addresses: [{ id: 'addr_live', userId: 'usr_live', chain: 'BSC', address: targetAddress, signerVerified: true, disabled: false }], blockchain_transactions: [], deposits: [], wallet_ledger: [], auditLogs: [] };
+const liveLookbackLog = { ...targetLog, blockNumber: 1070 };
+const liveFirst = processDepositWatcherLogs(liveLookbackDb, [liveLookbackLog], 1100, targetTxHash);
+assert(liveFirst.decoded === 1 && liveLookbackDb.deposits.length === 1 && liveLookbackDb.wallet_ledger.length === 1 && liveLookbackDb.deposits[0].status === 'credited', 'Cursor-ahead live lookback scan must detect and credit a confirmed deposit inside the lookback window');
+processDepositWatcherLogs(liveLookbackDb, [liveLookbackLog], 1100, targetTxHash);
+assert(liveLookbackDb.deposits.length === 1 && liveLookbackDb.wallet_ledger.length === 1, 'Second live lookback scan must not duplicate deposit or credit');
 
 const legacyDb = { auditLogs: [], blockchain_transactions: [{ id: 'tx_legacy', eventKey: 'BSC:legacy:0', chain: 'BSC', amount: 1000000000000000000 }], deposits: [{ id: 'dep_legacy', chain: 'BSC', amount: 1000000000000000000, creditedAmount: 1000000000000000000 }], wallet_ledger: [{ asset: 'USDT', reason: 'BEP20 deposit credited', refId: 'BSC:legacy:0', amount: 1000000000000000000 }], sweep_transactions: [{ id: 'swp_legacy', depositId: 'dep_legacy', amount: 1000000000000000000 }], reserve_ledger: [{ asset: 'USDT', walletType: 'treasury', direction: 'credit', refId: 'swp_legacy', amount: 1000000000000000000 }], reserve_wallets: [{ asset: 'USDT', walletType: 'treasury', balance: 1000000000000000000 }] };
 assert(repairBep20RawUnitAmounts(legacyDb).corrected, 'Legacy raw-unit records must be repaired');

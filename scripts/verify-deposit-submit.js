@@ -137,12 +137,21 @@ async function main() {
     await evaluate(cdp, `localStorage.hb9token=${JSON.stringify(auth.token)};localStorage.hb9user=${JSON.stringify(JSON.stringify(auth.user))};location.reload()`);
     await waitFor('!!document.querySelector("[data-view=\\"Deposit\\"]")', cdp);
     await evaluate(cdp, `document.querySelector('[data-view="Deposit"]').click()`);
-    await waitFor(`!!document.querySelector('[data-copy-deposit-address]')`, cdp);
+    await waitFor(`!!document.querySelector('#deposit-intent')`, cdp);
+    const initialState = await evaluate(cdp, `(() => ({ hasAddress: !!document.querySelector('[data-copy-deposit-address]'), hasIntentForm: !!document.querySelector('#deposit-intent'), historyVisible: document.body.innerText.includes('Deposit History') }))()`);
+    if (initialState.hasAddress || !initialState.hasIntentForm || !initialState.historyVisible) throw Error(`Unexpected initial Deposit UI state: ${JSON.stringify(initialState)}`);
+    await evaluate(cdp, `document.querySelector('#deposit-intent input[name="amount"]').value='25';document.querySelector('#deposit-intent button').click()`);
+    try {
+      await waitFor(`!!document.querySelector('[data-copy-deposit-address]')`, cdp);
+    } catch (error) {
+      const debug = await evaluate(cdp, `(() => ({ text: document.body.innerText, form: !!document.querySelector('#deposit-intent'), address: !!document.querySelector('[data-copy-deposit-address]') }))()`);
+      throw Error(`${error.message}: ${JSON.stringify(debug)}`);
+    }
     const state = await evaluate(cdp, `(() => {
       const address = document.querySelector('[data-copy-deposit-address]')?.dataset.copyDepositAddress;
-      return { address, hasManualForm: !!document.querySelector('#deposit'), historyVisible: document.body.innerText.includes('Deposit History') };
+      return { address, hasManualForm: !!document.querySelector('#deposit'), hasIntentForm: !!document.querySelector('#deposit-intent'), historyVisible: document.body.innerText.includes('Deposit History') };
     })()`);
-    if (!/^0x[a-fA-F0-9]{40}$/.test(state.address || '') || state.hasManualForm || !state.historyVisible) throw Error(`Unexpected Deposit UI state: ${JSON.stringify(state)}`);
+    if (!/^0x[a-fA-F0-9]{40}$/.test(state.address || '') || state.hasManualForm || !state.hasIntentForm || !state.historyVisible) throw Error(`Unexpected Deposit UI state: ${JSON.stringify(state)}`);
     const dashboard = await request('GET', '/api/dashboard', null, auth.token);
     if (!dashboard.depositService.configured || dashboard.wallets.usdt !== 0) throw Error('Dashboard did not expose a configured automatic deposit service');
     const admin = await request('POST', '/api/auth/login', { email: 'admin@hb9.local', password: 'Admin@123' });

@@ -430,6 +430,17 @@ function resolveDepositWatcherStart({latestBlock,confirmations,state={},startBlo
   const canResume=state.cursorMode==='latest'&&Number.isInteger(saved)&&saved>=defaultStart;
   return {nextBlock:canResume?saved+1:defaultStart,cursorMode:'latest',configuredStartBlock:null,reset:false};
 }
+function depositWatcherLookbackBlocks(value=process.env.DEPOSIT_WATCHER_LOOKBACK_BLOCKS){
+  const blocks=Number(value??5000);
+  return Number.isInteger(blocks)&&blocks>=0?blocks:5000;
+}
+function resolveDepositWatcherLiveScanRange({latestBlock,confirmations,state={},startBlock=process.env.DEPOSIT_WATCHER_START_BLOCK,resetCursor=false,lookbackBlocks=process.env.DEPOSIT_WATCHER_LOOKBACK_BLOCKS}){
+  const latest=Math.max(0,Number(latestBlock)),required=Math.max(1,Number(confirmations)||12),lookback=depositWatcherLookbackBlocks(lookbackBlocks),confirmedToBlock=Math.max(0,latest-required);
+  const start=resolveDepositWatcherStart({latestBlock:latest,confirmations:required,state,startBlock,resetCursor});
+  if(start.reset)return {...start,nextBlock:latest,toBlock:latest,confirmedToBlock,lookbackBlocks:lookback,lookbackStartBlock:Math.max(0,latest-lookback),cursorNextBlock:latest};
+  const cursorNextBlock=start.nextBlock,lookbackStartBlock=Math.max(0,latest-lookback),nextBlock=Math.min(cursorNextBlock,lookbackStartBlock);
+  return {...start,nextBlock,toBlock:confirmedToBlock,confirmedToBlock,lookbackBlocks:lookback,lookbackStartBlock,cursorNextBlock};
+}
 function watcherLogContext(log){
   const logIndex=Number.isInteger(log?.index)?log.index:Number.isInteger(log?.logIndex)?log.logIndex:null;
   return {transactionHash:typeof log?.transactionHash==='string'?log.transactionHash:null,blockNumber:Number.isInteger(log?.blockNumber)?log.blockNumber:null,logIndex,contractAddress:log?.address??log?.contractAddress??null};
@@ -633,6 +644,19 @@ function validateBep20TransferEvent({chain,txHash,logIndex,toAddress,fromAddress
   if(!Number.isInteger(blockNumber)||blockNumber<0)failures.push('block number must be a non-negative integer');
   return failures;
 }
+function amountsMatch(a,b){return Math.abs(Number(a)-Number(b))<1e-9;}
+function pendingDepositIntentForTransfer(db,{userId,depositAddressId,amount}){
+  return (db.deposits||[]).find(item=>item.userId===userId&&item.depositAddressId===depositAddressId&&item.status==='waiting_for_blockchain_transaction'&&!item.txHash&&amountsMatch(item.amount,amount));
+}
+function createDepositIntent(db,userId,amount,chainInput='BSC'){
+  const value=Number(amount),chain=normalizeChain(chainInput);
+  if(!Number.isFinite(value)||value<=0)throw Error('Deposit amount must be greater than zero');
+  const address=ensureDepositAddress(db,userId,chain),now=new Date().toISOString(),requiredConfirmations=Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12);
+  const deposit={id:id('dep'),userId,amount:roundCurrency(value),asset:'USDT',chain,network:'USDT BEP20',depositAddressId:address.id,status:'waiting_for_blockchain_transaction',confirmations:0,requiredConfirmations,txHash:null,logIndex:null,createdAt:now};
+  db.deposits=db.deposits||[];db.deposits.push(deposit);
+  audit(db,'BEP20_DEPOSIT_INTENT_CREATED',{depositId:deposit.id,userId,amount:deposit.amount,depositAddressId:address.id,address:address.address});
+  return {deposit,depositAddress:address};
+}
 function depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}){
   const normalizedChain=normalizeChain(chain),normalizedToAddress=normalizedAddressLower(toAddress),records=db.deposit_addresses||[];
   const candidates=records.map(record=>{
@@ -718,12 +742,32 @@ function recordBep20Transfer(db,input){
   if(!tx){
     tx={id:id('btx'),eventKey,chain,txHash,logIndex,fromAddress:getAddress(fromAddress),toAddress:address.address,userId:address.userId,depositAddressId:address.id,amount,confirmations:0,requiredConfirmations,blockNumber,status:'detected',createdAt:now,updatedAt:now};
     db.blockchain_transactions.push(tx);
-    const deposit={id:id('dep'),userId:address.userId,amount,asset:'USDT',chain,network:'USDT BEP20',txHash,logIndex,fromAddress:tx.fromAddress,depositAddressId:address.id,status:'detected',confirmations:0,requiredConfirmations,blockNumber,createdAt:now};
-    db.deposits.push(deposit);
+    const intent=pendingDepositIntentForTransfer(db,{userId:address.userId,depositAddressId:address.id,amount});
+    const deposit=intent||{id:id('dep'),userId:address.userId,amount,asset:'USDT',chain,network:'USDT BEP20',depositAddressId:address.id,createdAt:now};
+    Object.assign(deposit,{amount,asset:'USDT',chain,network:'USDT BEP20',txHash,logIndex,fromAddress:tx.fromAddress,depositAddressId:address.id,status:'detected',confirmations:0,requiredConfirmations,blockNumber,detectedAt:now});
+    if(!intent)db.deposits.push(deposit);
     console.log('BEP20_DEPOSIT_DETECTED',{eventKey,txHash,logIndex,userId:address.userId,toAddress:address.address,amount,blockNumber});
-    audit(db,'BEP20_DEPOSIT_DETECTED',{eventKey,txHash,logIndex,userId:address.userId,toAddress:address.address,amount,blockNumber});
+    audit(db,'BEP20_DEPOSIT_DETECTED',{eventKey,txHash,logIndex,userId:address.userId,toAddress:address.address,amount,blockNumber,depositId:deposit.id,matchedIntent:Boolean(intent)});
   }
   return tx;
+}
+function processDepositWatcherLogs(db,logs,latestBlock,targetTxHash=watcherDebugTxHash()){
+  let decoded=0,recorded=0,targetLogs=0;
+  for(const log of logs){
+    const targetMatch=isTargetWatcherLog(log,targetTxHash);
+    if(targetMatch){
+      targetLogs++;
+      console.log('WATCHER_LIVE_TARGET_MATCHED',{txHash:targetTxHash,stage:'before_decode',blockNumber:log.blockNumber,logIndex:receiptLogIndex(log),contractAddress:receiptLogAddress(log),topic0:receiptLogTopics(log)[0]||null});
+      console.log('WATCHER_LOG_FOUND',{txHash:targetTxHash,stage:'before_decode',blockNumber:log.blockNumber,logIndex:receiptLogIndex(log),contractAddress:receiptLogAddress(log),topic0:receiptLogTopics(log)[0]||null});
+    }
+    const parsed=parseBep20TransferWatcherLog(log);
+    if(!parsed.event){warnRejectedDepositWatcherLog(log,parsed.reason);continue;}
+    decoded++;
+    try{if(recordBep20Transfer(db,parsed.event))recorded++;}catch(error){warnRejectedDepositWatcherLog(log,`recording event failed: ${error.message}`);}
+  }
+  updateDepositConfirmations(db,latestBlock);
+  createSweepCandidates(db);
+  return {decoded,recorded,targetLogs};
 }
 function updateDepositConfirmations(db,currentBlock){
   const now=new Date().toISOString();
@@ -738,7 +782,7 @@ function updateDepositConfirmations(db,currentBlock){
     if(!alreadyCredited)walletEntry(db,{userId:tx.userId,asset:'USDT',direction:'credit',amount:tx.amount,reason:'BEP20 deposit credited',refId:tx.eventKey});
     tx.status='credited';tx.creditedAt=now;
     Object.assign(deposit,{status:'credited',creditedAt:now,creditedAmount:tx.amount});
-    if(!deposit.auditCreditedAt){audit(db,'BEP20_DEPOSIT_CREDITED',{eventKey:tx.eventKey,txHash:tx.txHash,logIndex:tx.logIndex,userId:tx.userId,amount:tx.amount,confirmations:tx.confirmations});deposit.auditCreditedAt=now;}
+    if(!deposit.auditCreditedAt){const details={eventKey:tx.eventKey,txHash:tx.txHash,logIndex:tx.logIndex,userId:tx.userId,amount:tx.amount,confirmations:tx.confirmations};console.log('BEP20_DEPOSIT_CREDITED',details);audit(db,'BEP20_DEPOSIT_CREDITED',details);deposit.auditCreditedAt=now;}
   }
 }
 async function pollDepositWatcher(){
@@ -748,7 +792,7 @@ async function pollDepositWatcher(){
     const provider=new JsonRpcProvider(process.env.BSC_RPC_URL), latestBlock=await provider.getBlockNumber(), db=readDB();
     const targetTxHash=watcherDebugTxHash(),targetReceipt=await debugTargetWatcherReceipt(provider,targetTxHash),targetBlock=Number.isInteger(targetReceipt?.blockNumber)?targetReceipt.blockNumber:null;
     db.deposit_watcher=db.deposit_watcher||{};
-    const start=resolveDepositWatcherStart({latestBlock,confirmations:process.env.REQUIRED_DEPOSIT_CONFIRMATIONS,state:db.deposit_watcher,resetCursor:process.env.DEPOSIT_WATCHER_RESET_CURSOR==='true'&&!watcherResetApplied});
+    const start=resolveDepositWatcherLiveScanRange({latestBlock,confirmations:process.env.REQUIRED_DEPOSIT_CONFIRMATIONS,state:db.deposit_watcher,resetCursor:process.env.DEPOSIT_WATCHER_RESET_CURSOR==='true'&&!watcherResetApplied});
     if(start.reset){
       console.log('WATCHER_SCAN_BLOCK_START',{mode:'reset',latestBlock,nextBlock:latestBlock,toBlock:latestBlock,targetTxHash,targetBlock,targetInRange:targetBlock===latestBlock,cursorMode:start.cursorMode});
       Object.assign(db.deposit_watcher,{lastProcessedBlock:latestBlock,cursorMode:start.cursorMode,lastCursorResetAt:new Date().toISOString()});
@@ -760,9 +804,9 @@ async function pollDepositWatcher(){
       console.log(`Deposit watcher starting from block ${latestBlock} to ${latestBlock} (cursor reset)`);
       return;
     }
-    const nextBlock=start.nextBlock;
-    const range=Math.max(1,Math.min(2000,Number(process.env.DEPOSIT_WATCHER_BLOCK_RANGE||500))), toBlock=Math.min(latestBlock,nextBlock+range-1);
+    const nextBlock=start.nextBlock,toBlock=start.toBlock,range=Math.max(0,toBlock-nextBlock+1);
     const targetInRange=Number.isInteger(targetBlock)&&targetBlock>=nextBlock&&targetBlock<=toBlock;
+    console.log('WATCHER_LIVE_SCAN_RANGE',{latestBlock,nextBlock,toBlock,range,confirmations:Number(process.env.REQUIRED_DEPOSIT_CONFIRMATIONS||12),lookbackBlocks:start.lookbackBlocks,lookbackStartBlock:start.lookbackStartBlock,cursorNextBlock:start.cursorNextBlock,cursorMode:start.cursorMode,configuredStartBlock:start.configuredStartBlock,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock??null,targetTxHash,targetBlock,targetInRange,willScan:nextBlock<=toBlock});
     console.log('WATCHER_SCAN_BLOCK_START',{latestBlock,nextBlock,toBlock,range,cursorMode:start.cursorMode,configuredStartBlock:start.configuredStartBlock,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock??null,targetTxHash,targetBlock,targetInRange,willScan:nextBlock<=toBlock});
     if(Number.isInteger(targetBlock)&&!targetInRange)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'target block is outside current watcher scan range',targetBlock,nextBlock,toBlock,latestBlock,cursorMode:start.cursorMode,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock??null});
     if(nextBlock<=toBlock){
@@ -771,20 +815,14 @@ async function pollDepositWatcher(){
       const targetLogs=logs.filter(log=>isTargetWatcherLog(log,targetTxHash));
       console.log('WATCHER_LOG_FOUND',{txHash:targetTxHash,fromBlock:nextBlock,toBlock,logsReturned:logs.length,targetLogsReturned:targetLogs.length,targetLogIndexes:targetLogs.map(receiptLogIndex),targetInRange});
       if(targetInRange&&!targetLogs.length)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'target block was scanned but getLogs returned no target tx log',targetBlock,fromBlock:nextBlock,toBlock,configuredContract:watcherConfiguredTokenAddress(),transferTopic:TRANSFER_TOPIC});
-      for(const log of logs){
-        if(isTargetWatcherLog(log,targetTxHash))console.log('WATCHER_LOG_FOUND',{txHash:targetTxHash,stage:'before_decode',blockNumber:log.blockNumber,logIndex:receiptLogIndex(log),contractAddress:receiptLogAddress(log),topic0:receiptLogTopics(log)[0]||null});
-        const parsed=parseBep20TransferWatcherLog(log);
-        if(!parsed.event){warnRejectedDepositWatcherLog(log,parsed.reason);continue;}
-        try{recordBep20Transfer(db,parsed.event);}catch(error){warnRejectedDepositWatcherLog(log,`recording event failed: ${error.message}`);}
-      }
-      updateDepositConfirmations(db,latestBlock);
+      const processed=processDepositWatcherLogs(db,logs,latestBlock,targetTxHash);
       // Do not advance the cursor until getLogs and event handling have both succeeded.
       Object.assign(db.deposit_watcher,{lastProcessedBlock:toBlock,cursorMode:start.cursorMode});
       if(start.configuredStartBlock===null)delete db.deposit_watcher.configuredStartBlock;
       else db.deposit_watcher.configuredStartBlock=start.configuredStartBlock;
       delete db.deposit_watcher.lastScannedBlock;
       writeDB(db);
-      console.log('WATCHER_SCAN_BLOCK_END',{latestBlock,nextBlock,toBlock,cursorMode:start.cursorMode,targetTxHash,targetBlock,targetInRange,logsReturned:logs.length,targetLogsReturned:targetLogs.length,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock});
+      console.log('WATCHER_SCAN_BLOCK_END',{latestBlock,nextBlock,toBlock,cursorMode:start.cursorMode,targetTxHash,targetBlock,targetInRange,logsReturned:logs.length,targetLogsReturned:targetLogs.length,decodedLogs:processed.decoded,recordedTransfers:processed.recorded,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock});
       return;
     }
     updateDepositConfirmations(db,latestBlock);writeDB(db);
@@ -951,7 +989,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/market/hb9-usdt'&&method==='GET'){const market=await exchangeMarket(db);return send(res,200,{symbol:'HB9/USDT',...market});}
       if(p==='/api/dashboard'&&method==='GET')return send(res,200,dashboard(db,u));
       if(p==='/api/deposit-address'&&method==='GET'){const status=depositAddressServiceStatus();if(!status.configured)return send(res,503,{error:status.error});try{const record=ensureDepositAddress(db,u.id,url.searchParams.get('chain')||BSC_CHAIN);writeDB(db);return send(res,200,{depositAddress:record,service:depositServiceStatus()});}catch(error){return send(res,503,{error:'Deposit address service is not configured'});}}
-      if(p==='/api/deposits'&&method==='POST')return send(res,410,{error:'Manual deposit submission is disabled. Send USDT BEP20 to your assigned deposit address.'});
+      if(p==='/api/deposits'&&method==='POST'){const status=depositAddressServiceStatus();if(!status.configured)return send(res,503,{error:status.error});try{const input=await body(req),result=createDepositIntent(db,u.id,input.amount,url.searchParams.get('chain')||BSC_CHAIN);writeDB(db);return send(res,201,{message:'Deposit request created. Send exact USDT BEP20 amount to the verified address.',deposit:result.deposit,depositAddress:result.depositAddress,service:depositServiceStatus()});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/internal/deposit-events'&&method==='POST'&&process.env.DEPOSIT_WATCHER_TEST_MODE==='true'){const event=await body(req),tx=recordBep20Transfer(db,event);if(!tx)return send(res,202,{message:'Transfer does not target an assigned deposit address'});updateDepositConfirmations(db,Number(event.currentBlock));writeDB(db);const deposit=db.deposits.find(x=>x.chain===tx.chain&&x.txHash===tx.txHash&&Number(x.logIndex)===Number(tx.logIndex));return send(res,200,{transaction:tx,deposit});}
       if(p==='/api/convert'&&method==='POST'){if(!db.settings.exchangeEnabled)return send(res,403,{error:'Exchange is disabled'});const {amount}=await body(req), value=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), rate=market.buyPrice, fee=setting(db,'tradingFeePercent')+setting(db,'buyFeePercent');if(!Number.isFinite(value)||value<=0)return send(res,400,{error:'Conversion amount is invalid'});if(value>balances.usdt)return send(res,400,{error:'Not enough USDT balance'});const hb9Amount=roundCurrency(value/rate*(1-fee/100));if(reserveWallet(db,'HB9','exchange').balance<hb9Amount)return send(res,400,{error:'HB9 reserve is insufficient'});const orderId=id('xord'),createdAt=new Date().toISOString();reserveMove(db,{asset:'HB9',walletType:'exchange',direction:'debit',amount:hb9Amount,reason:'HB9 buy',userId:u.id,refId:orderId});reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:value,reason:'HB9 buy',userId:u.id,refId:orderId});walletEntry(db,{userId:u.id,asset:'USDT',direction:'debit',amount:value,reason:'HB9 buy',refId:orderId});walletEntry(db,{userId:u.id,asset:'HB9',direction:'credit',amount:hb9Amount,reason:'HB9 buy',refId:orderId});db.conversions=(db.conversions||[]);db.exchange_orders=db.exchange_orders||[];const order={id:orderId,userId:u.id,direction:'buy',usdtAmount:value,hb9Amount,rate,buyPrice:rate,sellPrice:market.sellPrice,feePercent:fee,status:'completed',createdAt,immutable:true};db.conversions.push({id:id('cnv'),...order});db.exchange_orders.push(order);writeDB(db);return send(res,201,{message:'USDT converted to HB9',hb9Amount,buyPrice:rate});}
       if(p==='/api/exchange/sell'&&method==='POST'){if(!db.settings.exchangeEnabled)return send(res,403,{error:'Exchange is disabled'});const {amount}=await body(req), hb9Amount=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), rate=market.sellPrice, fee=setting(db,'tradingFeePercent')+setting(db,'sellFeePercent');if(!Number.isFinite(hb9Amount)||hb9Amount<=0)return send(res,400,{error:'HB9 amount is invalid'});if(hb9Amount>balances.hb9)return send(res,400,{error:'Not enough HB9 wallet balance'});const usdtAmount=roundCurrency(hb9Amount*rate*(1-fee/100));if(reserveWallet(db,'USDT','treasury').balance<usdtAmount)return send(res,400,{error:'USDT reserve is insufficient'});const orderId=id('xord'),createdAt=new Date().toISOString();reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'debit',amount:usdtAmount,reason:'HB9 sell payout',userId:u.id,refId:orderId});burnHb9(db,{amount:hb9Amount,reason:'HB9 sell burn',userId:u.id,refId:orderId});walletEntry(db,{userId:u.id,asset:'HB9',direction:'debit',amount:hb9Amount,reason:'HB9 sell burn',refId:orderId});walletEntry(db,{userId:u.id,asset:'USDT',direction:'credit',amount:usdtAmount,reason:'HB9 sell payout',refId:orderId});db.conversions=(db.conversions||[]);db.exchange_orders=db.exchange_orders||[];const order={id:orderId,userId:u.id,direction:'sell',hb9Amount,usdtAmount,rate,sellPrice:rate,buyPrice:market.buyPrice,feePercent:fee,status:'completed',burnedHb9:hb9Amount,createdAt,immutable:true};db.conversions.push({id:id('cnv'),...order});db.exchange_orders.push(order);writeDB(db);return send(res,201,{message:'HB9 converted to USDT and burned',usdtAmount,sellPrice:rate,burnedHb9:hb9Amount,totalBurnedHb9:burnTotal(db),remainingHb9Supply:solvencyReport(db).remainingHb9Supply,circulatingHb9:solvencyReport(db).circulatingHb9});}
@@ -981,4 +1019,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const hdStatus=hdWalletConsistencyStatus();if(!hdStatus.configured)console.error('DEPOSIT_ADDRESS_GENERATION_DISABLED',hdStatus.error);else console.log('DEPOSIT_ADDRESS_HD_WALLET_VERIFIED',{address0:hdStatus.address0,hdFingerprint:hdStatus.hdFingerprint,derivationPath:hdStatus.derivationPath});console.log(`HB9 Staking running at ${APP_URL}`);startDepositWatcher();startSweepWorker();});
-module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};
+module.exports={configuredDepositWatcherStartBlock,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses};

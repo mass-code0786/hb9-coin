@@ -75,14 +75,13 @@ async function registerUser(name, email, walletAddress, sponsorEmail) {
 }
 
 async function depositConvertAndStake(token, adminToken, userId, expectedActiveHb9 = STAKE_HB9) {
-  let manualDisabled=false;
-  try{await request('POST','/api/deposits',{amount:100},token);}catch(error){manualDisabled=error.status===410;}
-  assert(manualDisabled,'Manual deposit API must be disabled');
-  const addressResponse = await request('GET', '/api/deposit-address', null, token);
+  const addressResponse = await request('POST','/api/deposits',{amount:100},token);
+  assert(addressResponse.deposit?.status === 'waiting_for_blockchain_transaction' && addressResponse.deposit?.txHash === null, 'Deposit request must create a waiting blockchain intent without a tx hash');
   const txHash = `0x${crypto.createHash('sha256').update(`${userId}:${Date.now()}`).digest('hex')}`;
   const event = {chain:'BSC',txHash,logIndex:0,fromAddress:'0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',toAddress:addressResponse.depositAddress.address,amount:100,blockNumber:100,currentBlock:100};
   const pending = await request('POST', '/api/internal/deposit-events', event, token);
   assert(pending.deposit.status === 'pending' && pending.deposit.confirmations === 1, 'Detected transfer must wait for confirmations');
+  assert(pending.deposit.id === addressResponse.deposit.id && pending.deposit.txHash === txHash, 'Watcher must link the chain transfer to the pending deposit intent');
   const pendingDashboard = await request('GET', '/api/dashboard', null, token);
   assert(pendingDashboard.wallets.usdt === 0, 'Pending transfer must not credit the USDT wallet');
   const credited = await request('POST', '/api/internal/deposit-events', {...event,currentBlock:111}, token);
@@ -485,7 +484,7 @@ async function main() {
 
       const resetResult = await request('POST', '/api/admin/demo/reset', null, admin).catch(error => error);
       assert(resetResult.status === 404 && resetResult.body?.error === 'Route not found', 'Demo reset route must be removed');
-      console.log('SMOKE PASS: HD xpub address reuse, simulated BEP20 confirmation credit, tx/log-index idempotency, manual deposit API removal, wallet ledger credit, and existing HB9 financial flows.');
+      console.log('SMOKE PASS: HD xpub address reuse, deposit intent linking, simulated BEP20 confirmation credit, tx/log-index idempotency, wallet ledger credit, and existing HB9 financial flows.');
     } finally {
       server?.kill();
       fs.rmSync(dataFile, { force: true });
