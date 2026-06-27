@@ -21,6 +21,7 @@ const USDT_BEP20_ABI = ['event Transfer(address indexed from, address indexed to
 const usdtInterface = new Interface(USDT_BEP20_ABI);
 const TRANSFER_TOPIC = usdtInterface.getEvent('Transfer').topicHash;
 const WATCHER_POLL_MS = Math.max(5000, Number(process.env.DEPOSIT_WATCHER_POLL_MS || 15000));
+const TARGET_WATCHER_DEBUG_TX_HASH = '0xa90fadee77b0ec3fda2af57d1c4b71f18cc3309bcf14f85e10f00930748ece54';
 let watcherTimer = null;
 let watcherRunning = false;
 let watcherResetApplied = false;
@@ -465,6 +466,37 @@ function parseBep20TransferWatcherLog(log){
   }catch(error){return watcherReject(log,`unable to decode Transfer log: ${error.message}`);}
 }
 function warnRejectedDepositWatcherLog(log,reason){console.warn('WATCHER_TRANSFER_REJECTED',{reason,...watcherLogContext(log)});}
+function watcherDebugTxHash(){const value=String(process.env.WATCHER_DEBUG_TX_HASH||TARGET_WATCHER_DEBUG_TX_HASH||'').trim().toLowerCase();return /^0x[a-f0-9]{64}$/.test(value)?value:null;}
+function receiptLogIndex(log){return Number.isInteger(log?.index)?log.index:Number.isInteger(log?.logIndex)?log.logIndex:null;}
+function receiptLogAddress(log){return log?.address??log?.contractAddress??null;}
+function receiptLogTopics(log){return Array.isArray(log?.topics)?log.topics:[];}
+function isTargetWatcherLog(log,targetTxHash=watcherDebugTxHash()){return Boolean(targetTxHash&&String(log?.transactionHash||'').toLowerCase()===targetTxHash);}
+function watcherReceiptTransferSummary(receipt){
+  const configuredToken=watcherConfiguredTokenAddress();
+  return (receipt?.logs||[]).map(log=>({
+    txHash:String(log.transactionHash||receipt.hash||'').toLowerCase(),
+    blockNumber:receipt.blockNumber,
+    logIndex:receiptLogIndex(log),
+    contractAddress:receiptLogAddress(log),
+    contractMatches:configuredToken&&isAddress(receiptLogAddress(log)||'')?getAddress(receiptLogAddress(log))===configuredToken:false,
+    topic0:receiptLogTopics(log)[0]||null,
+    topicMatches:String(receiptLogTopics(log)[0]||'').toLowerCase()===TRANSFER_TOPIC.toLowerCase(),
+    topicsLength:receiptLogTopics(log).length,
+    dataLength:String(log.data||'').length
+  }));
+}
+async function debugTargetWatcherReceipt(provider,targetTxHash=watcherDebugTxHash()){
+  if(!targetTxHash)return null;
+  try{
+    const receipt=await provider.getTransactionReceipt(targetTxHash);
+    if(!receipt){console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'receipt not found'});return null;}
+    const summary=watcherReceiptTransferSummary(receipt),matchingTransferLogs=summary.filter(item=>item.contractMatches&&item.topicMatches);
+    console.log('WATCHER_RECEIPT_DECODED',{txHash:targetTxHash,status:Number(receipt.status),blockNumber:receipt.blockNumber,logs:summary.length,matchingTransferLogs:matchingTransferLogs.length,matchingTransferLogIndexes:matchingTransferLogs.map(item=>item.logIndex),summary});
+    if(Number(receipt.status)!==1)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'receipt status is not successful',status:Number(receipt.status),blockNumber:receipt.blockNumber});
+    if(!matchingTransferLogs.length)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'receipt has no USDT Transfer log matching current contract/topic filter',blockNumber:receipt.blockNumber,configuredContract:watcherConfiguredTokenAddress(),transferTopic:TRANSFER_TOPIC});
+    return receipt;
+  }catch(error){console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:`receipt lookup failed: ${error.message}`});return null;}
+}
 function sweepServiceStatus(){
   const missing=[];
   if(process.env.SWEEP_ENABLED!=='true')missing.push('SWEEP_ENABLED=true');
@@ -714,23 +746,33 @@ async function pollDepositWatcher(){
   watcherRunning=true;
   try{
     const provider=new JsonRpcProvider(process.env.BSC_RPC_URL), latestBlock=await provider.getBlockNumber(), db=readDB();
+    const targetTxHash=watcherDebugTxHash(),targetReceipt=await debugTargetWatcherReceipt(provider,targetTxHash),targetBlock=Number.isInteger(targetReceipt?.blockNumber)?targetReceipt.blockNumber:null;
     db.deposit_watcher=db.deposit_watcher||{};
     const start=resolveDepositWatcherStart({latestBlock,confirmations:process.env.REQUIRED_DEPOSIT_CONFIRMATIONS,state:db.deposit_watcher,resetCursor:process.env.DEPOSIT_WATCHER_RESET_CURSOR==='true'&&!watcherResetApplied});
     if(start.reset){
+      console.log('WATCHER_SCAN_BLOCK_START',{mode:'reset',latestBlock,nextBlock:latestBlock,toBlock:latestBlock,targetTxHash,targetBlock,targetInRange:targetBlock===latestBlock,cursorMode:start.cursorMode});
       Object.assign(db.deposit_watcher,{lastProcessedBlock:latestBlock,cursorMode:start.cursorMode,lastCursorResetAt:new Date().toISOString()});
       delete db.deposit_watcher.lastScannedBlock;
       delete db.deposit_watcher.configuredStartBlock;
       writeDB(db);
       watcherResetApplied=true;
+      console.log('WATCHER_SCAN_BLOCK_END',{mode:'reset',latestBlock,nextBlock:latestBlock,toBlock:latestBlock,targetTxHash,targetBlock,targetInRange:targetBlock===latestBlock,processed:false,reason:'cursor reset'});
       console.log(`Deposit watcher starting from block ${latestBlock} to ${latestBlock} (cursor reset)`);
       return;
     }
     const nextBlock=start.nextBlock;
     const range=Math.max(1,Math.min(2000,Number(process.env.DEPOSIT_WATCHER_BLOCK_RANGE||500))), toBlock=Math.min(latestBlock,nextBlock+range-1);
+    const targetInRange=Number.isInteger(targetBlock)&&targetBlock>=nextBlock&&targetBlock<=toBlock;
+    console.log('WATCHER_SCAN_BLOCK_START',{latestBlock,nextBlock,toBlock,range,cursorMode:start.cursorMode,configuredStartBlock:start.configuredStartBlock,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock??null,targetTxHash,targetBlock,targetInRange,willScan:nextBlock<=toBlock});
+    if(Number.isInteger(targetBlock)&&!targetInRange)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'target block is outside current watcher scan range',targetBlock,nextBlock,toBlock,latestBlock,cursorMode:start.cursorMode,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock??null});
     if(nextBlock<=toBlock){
       console.log(`Deposit watcher starting from block ${nextBlock} to ${toBlock}`);
       const logs=await provider.getLogs({address:getAddress(process.env.USDT_BEP20_CONTRACT),topics:[TRANSFER_TOPIC],fromBlock:nextBlock,toBlock});
+      const targetLogs=logs.filter(log=>isTargetWatcherLog(log,targetTxHash));
+      console.log('WATCHER_LOG_FOUND',{txHash:targetTxHash,fromBlock:nextBlock,toBlock,logsReturned:logs.length,targetLogsReturned:targetLogs.length,targetLogIndexes:targetLogs.map(receiptLogIndex),targetInRange});
+      if(targetInRange&&!targetLogs.length)console.warn('WATCHER_RECEIPT_SKIPPED',{txHash:targetTxHash,reason:'target block was scanned but getLogs returned no target tx log',targetBlock,fromBlock:nextBlock,toBlock,configuredContract:watcherConfiguredTokenAddress(),transferTopic:TRANSFER_TOPIC});
       for(const log of logs){
+        if(isTargetWatcherLog(log,targetTxHash))console.log('WATCHER_LOG_FOUND',{txHash:targetTxHash,stage:'before_decode',blockNumber:log.blockNumber,logIndex:receiptLogIndex(log),contractAddress:receiptLogAddress(log),topic0:receiptLogTopics(log)[0]||null});
         const parsed=parseBep20TransferWatcherLog(log);
         if(!parsed.event){warnRejectedDepositWatcherLog(log,parsed.reason);continue;}
         try{recordBep20Transfer(db,parsed.event);}catch(error){warnRejectedDepositWatcherLog(log,`recording event failed: ${error.message}`);}
@@ -742,9 +784,11 @@ async function pollDepositWatcher(){
       else db.deposit_watcher.configuredStartBlock=start.configuredStartBlock;
       delete db.deposit_watcher.lastScannedBlock;
       writeDB(db);
+      console.log('WATCHER_SCAN_BLOCK_END',{latestBlock,nextBlock,toBlock,cursorMode:start.cursorMode,targetTxHash,targetBlock,targetInRange,logsReturned:logs.length,targetLogsReturned:targetLogs.length,lastProcessedBlock:db.deposit_watcher.lastProcessedBlock});
       return;
     }
     updateDepositConfirmations(db,latestBlock);writeDB(db);
+    console.log('WATCHER_SCAN_BLOCK_END',{latestBlock,nextBlock,toBlock,cursorMode:start.cursorMode,targetTxHash,targetBlock,targetInRange,processed:false,reason:'no new block range'});
   }catch(error){console.error('Deposit watcher error:',error.message);}finally{watcherRunning=false;}
 }
 function startDepositWatcher(){if(process.env.DEPOSIT_WATCHER_ENABLED==='true'){pollDepositWatcher();watcherTimer=setInterval(pollDepositWatcher,WATCHER_POLL_MS);}}
