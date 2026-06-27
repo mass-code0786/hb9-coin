@@ -184,9 +184,9 @@ function burnHb9(db,{amount,reason,refId,userId}){
   db.burn_ledger.push(entry);
   return entry;
 }
-function walletEntry(db,{userId,asset,direction,amount,reason,refId}){
+function walletEntry(db,{userId,asset,direction,amount,reason,refId,type}) {
   ensureSupply(db);
-  const entry={id:id('wlt'),userId,asset,direction,amount:roundCurrency(Number(amount)),reason,refId,createdAt:new Date().toISOString(),immutable:true};
+  const entry={id:id('wlt'),userId,asset,direction,amount:roundCurrency(Number(amount)),reason,refId,type,createdAt:new Date().toISOString(),immutable:true};
   db.wallet_ledger.push(entry);
   return entry;
 }
@@ -370,6 +370,8 @@ function payLevelIncome(db,sourceUser,stake,payoutPrice){
 }
 function walletBalances(db,userId) {
   const deposits=db.deposits.filter(x=>x.userId===userId&&(x.status==='approved'||x.status==='credited')).reduce((n,x)=>n+x.amount,0);
+  const adminUsdt=(db.wallet_ledger||[]).filter(x=>x.userId===userId&&x.asset==='USDT'&&x.type==='ADMIN_FUND_TRANSFER').reduce((n,x)=>n+(x.direction==='credit'?1:-1)*(Number(x.amount)||0),0);
+  const adminHb9=(db.wallet_ledger||[]).filter(x=>x.userId===userId&&x.asset==='HB9'&&x.type==='ADMIN_FUND_TRANSFER').reduce((n,x)=>n+(x.direction==='credit'?1:-1)*(Number(x.amount)||0),0);
   const conversions=(db.conversions||[]).filter(x=>x.userId===userId), buys=conversions.filter(x=>!x.direction||x.direction==='buy'), sells=conversions.filter(x=>x.direction==='sell');
   const convertedUsdt=buys.reduce((n,x)=>n+x.usdtAmount,0), receivedHb9=buys.reduce((n,x)=>n+x.hb9Amount,0), soldHb9=sells.reduce((n,x)=>n+x.hb9Amount,0), receivedUsdt=sells.reduce((n,x)=>n+x.usdtAmount,0), transfers=db.transfers||[], sentHb9=transfers.filter(x=>x.senderId===userId).reduce((n,x)=>n+x.amount+x.fee,0), receivedTransferHb9=transfers.filter(x=>x.receiverId===userId).reduce((n,x)=>n+x.amount,0);
   const stakedHb9=db.stakes.filter(x=>x.userId===userId).reduce((n,x)=>n+x.coinAmount,0);
@@ -378,7 +380,7 @@ function walletBalances(db,userId) {
   const referralHb9=(db.referralLedger||[]).filter(x=>x.sponsorId===userId&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount) || Number(x.referralAmount) || 0),0);
   const levelHb9=levelIncomeTotal(db,userId);
   const salaryHb9=(db.salary_payouts||[]).filter(x=>x.userId===userId&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0);
-  return {usdt:roundCurrency(deposits-convertedUsdt+receivedUsdt-withdrawals),withdrawableUsdt:roundCurrency(receivedUsdt-withdrawals),hb9:roundCurrency(receivedHb9+b1Hb9+referralHb9+levelHb9+salaryHb9-soldHb9-stakedHb9-sentHb9+receivedTransferHb9),totalDeposit:roundCurrency(deposits)};
+  return {usdt:roundCurrency(deposits+adminUsdt-convertedUsdt+receivedUsdt-withdrawals),withdrawableUsdt:roundCurrency(receivedUsdt+adminUsdt-withdrawals),hb9:roundCurrency(receivedHb9+adminHb9+b1Hb9+referralHb9+levelHb9+salaryHb9-soldHb9-stakedHb9-sentHb9+receivedTransferHb9),totalDeposit:roundCurrency(deposits)};
 }
 function flushTotal(db,userId) { return db.flushRecords.filter(x=>x.userId===userId).reduce((n,x)=>n+x.flushedIncome,0); }
 function deterministicInt(seed, min, max) {
@@ -724,6 +726,31 @@ function creditNowPaymentsDeposit(db,payload){
   Object.assign(deposit,{status:'credited',paymentStatus:status,credited:true,creditedAt:deposit.creditedAt||now,creditedAmount:deposit.amount,paymentId:deposit.paymentId||paymentId,invoiceId:deposit.invoiceId||invoiceId});
   audit(db,'NOWPAYMENTS_DEPOSIT_CREDITED',{depositId:deposit.id,userId:deposit.userId,amount:deposit.amount,paymentId,invoiceId,duplicate:alreadyCredited});
   return {deposit,credited:!alreadyCredited,duplicate:alreadyCredited};
+}
+function adminFundTransfer(db,admin,{userId,asset,action,amount,reason}){
+  if(!admin||admin.role!=='admin')throw Error('Admin only action');
+  const lookup=String(userId||'').trim().toLowerCase();
+  const target=(db.users||[]).find(user=>user.role==='user'&&(String(user.id||'').toLowerCase()===lookup||String(user.email||'').toLowerCase()===lookup||String(user.name||'').toLowerCase()===lookup));
+  if(!target||target.role!=='user')throw Error('User not found');
+  const normalizedAsset=String(asset||'').trim().toUpperCase();
+  const normalizedAction=String(action||'').trim().toLowerCase();
+  const value=roundCurrency(Number(amount));
+  const note=String(reason||'').trim();
+  if(!['USDT','HB9'].includes(normalizedAsset))throw Error('Asset must be USDT or HB9');
+  if(!['credit','debit'].includes(normalizedAction))throw Error('Action must be credit or debit');
+  if(!Number.isFinite(value)||value<=0)throw Error('Amount must be greater than zero');
+  if(!note)throw Error('Reason is required');
+  const before=walletBalances(db,target.id);
+  const available=normalizedAsset==='USDT'?before.usdt:before.hb9;
+  if(normalizedAction==='debit'&&value>available)throw Error('Debit cannot make user balance negative');
+  const transferId=id('aft'),createdAt=new Date().toISOString(),direction=normalizedAction;
+  const entry=walletEntry(db,{userId:target.id,asset:normalizedAsset,direction,amount:value,reason:note,refId:transferId,type:'ADMIN_FUND_TRANSFER'});
+  const after=walletBalances(db,target.id);
+  const record={id:transferId,type:'ADMIN_FUND_TRANSFER',adminId:admin.id,adminName:admin.name,userId:target.id,userName:target.name,userEmail:target.email,asset:normalizedAsset,action:normalizedAction,amount:value,reason:note,balanceBefore:available,balanceAfter:normalizedAsset==='USDT'?after.usdt:after.hb9,ledgerEntryId:entry.id,createdAt,immutable:true};
+  db.admin_fund_transfers=db.admin_fund_transfers||[];
+  db.admin_fund_transfers.push(record);
+  audit(db,'ADMIN_FUND_TRANSFER',record);
+  return {transfer:record,ledgerEntry:entry,balance:after};
 }
 function depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}){
   const normalizedChain=normalizeChain(chain),normalizedToAddress=normalizedAddressLower(toAddress),records=db.deposit_addresses||[];
@@ -1081,7 +1108,8 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/withdrawals'&&method==='POST'){const {amount,address}=await body(req);const value=Number(amount),available=walletBalances(db,u.id).withdrawableUsdt;if(!Number.isFinite(value)||value<=0)return send(res,400,{error:'Withdrawal amount is invalid'});if(!/^0x[a-fA-F0-9]{40}$/.test(String(address||'')))return send(res,400,{error:'Valid USDT BEP20 address is required'});if(value<setting(db,'minWithdrawal'))return send(res,400,{error:`Minimum withdrawal is ${setting(db,'minWithdrawal')} USDT`});if(value>available)return send(res,400,{error:'Not enough USDT withdrawal balance. Convert HB9 to USDT before withdrawing.'});const withdrawal={id:id('wd'),userId:u.id,asset:'USDT',chain:'BSC',amount:value,address,status:'pending',fee:roundCurrency(value*setting(db,'withdrawalFeePercent')/100),createdAt:new Date().toISOString()};db.withdrawals.push(withdrawal);walletEntry(db,{userId:u.id,asset:'USDT',direction:'lock',amount:value,reason:'USDT withdrawal lock',refId:withdrawal.id});writeDB(db);return send(res,201,{message:'USDT BEP20 withdrawal request submitted for manual approval.'});}
       if(u.role!=='admin')return send(res,403,{error:'Admin only action'});
       if(p==='/api/admin/transfer-settings'&&method==='PUT'){const {minHb9Transfer,hb9TransferFeePercent}=await body(req),min=Number(minHb9Transfer),fee=Number(hb9TransferFeePercent);if(!Number.isFinite(min)||min<0||!Number.isFinite(fee)||fee<0||fee>100)return send(res,400,{error:'Invalid transfer settings'});db.settings.minHb9Transfer=min;db.settings.hb9TransferFeePercent=fee;writeDB(db);return send(res,200,{message:'Transfer settings saved',settings:db.settings});}
-      if(p==='/api/admin/overview'&&method==='GET'){return send(res,200,{users:db.users.filter(x=>x.role==='user').map(x=>({...safeUser(x),summary:dashboard(db,x)})),settings:{...db.settings,market:marketSettings(db)},sweepService:sweepServiceStatus(),marketSettings:marketSettings(db),priceHistory:db.hb9_price_history||[],marketReport:hb9MarketReport(db),supply:db.hb9_supply,reserveWallets:db.reserve_wallets||[],reserveLedger:db.reserve_ledger||[],burnLedger:db.burn_ledger||[],walletLedger:db.wallet_ledger||[],exchangeOrders:db.exchange_orders||[],incomeEmissions:db.income_emissions||[],solvency:solvencyReport(db),deposits:db.deposits,depositAddresses:db.deposit_addresses||[],blockchainTransactions:db.blockchain_transactions||[],sweepTransactions:db.sweep_transactions||[],auditLogs:db.auditLogs||[],conversions:db.conversions||[],stakes:db.stakes,withdrawals:db.withdrawals,transfers:db.transfers||[],ledger:db.incomeLedger,referrals:db.referralLedger||[],levelIncomeLedger:db.level_income_ledger||[],salaryRanks:db.salary_ranks||[],salaryQualifications:db.salary_qualifications||[],salaryPayouts:db.salary_payouts||[],globals:db.globalTeamRecords,flushes:db.flushRecords,directBusinessAudit:db.directBusinessAudit||[],dailyRuns:db.dailyRuns||[],demoMode:DEMO_MODE});}
+      if(p==='/api/admin/fund-transfer'&&method==='POST'){try{const result=adminFundTransfer(db,u,await body(req));writeDB(db);return send(res,201,{message:'Admin fund transfer completed',...result});}catch(error){return send(res,error.message==='Admin only action'?403:400,{error:error.message});}}
+      if(p==='/api/admin/overview'&&method==='GET'){return send(res,200,{users:db.users.filter(x=>x.role==='user').map(x=>({...safeUser(x),summary:dashboard(db,x)})),settings:{...db.settings,market:marketSettings(db)},sweepService:sweepServiceStatus(),marketSettings:marketSettings(db),priceHistory:db.hb9_price_history||[],marketReport:hb9MarketReport(db),supply:db.hb9_supply,reserveWallets:db.reserve_wallets||[],reserveLedger:db.reserve_ledger||[],burnLedger:db.burn_ledger||[],walletLedger:db.wallet_ledger||[],exchangeOrders:db.exchange_orders||[],incomeEmissions:db.income_emissions||[],solvency:solvencyReport(db),deposits:db.deposits,depositAddresses:db.deposit_addresses||[],blockchainTransactions:db.blockchain_transactions||[],sweepTransactions:db.sweep_transactions||[],auditLogs:db.auditLogs||[],adminFundTransfers:db.admin_fund_transfers||[],conversions:db.conversions||[],stakes:db.stakes,withdrawals:db.withdrawals,transfers:db.transfers||[],ledger:db.incomeLedger,referrals:db.referralLedger||[],levelIncomeLedger:db.level_income_ledger||[],salaryRanks:db.salary_ranks||[],salaryQualifications:db.salary_qualifications||[],salaryPayouts:db.salary_payouts||[],globals:db.globalTeamRecords,flushes:db.flushRecords,directBusinessAudit:db.directBusinessAudit||[],dailyRuns:db.dailyRuns||[],demoMode:DEMO_MODE});}
       if(p==='/api/admin/reserve-wallets'&&method==='PUT'){const input=await body(req),asset=String(input.asset||'').toUpperCase(),walletType=String(input.walletType||''),balance=Number(input.balance);if(!['HB9','USDT'].includes(asset)||!walletType)return send(res,400,{error:'Valid asset and walletType are required'});if(!Number.isFinite(balance)||balance<0)return send(res,400,{error:'Reserve balance must be non-negative'});const wallet=reserveWallet(db,asset,walletType),old=wallet.balance;if(asset==='HB9'){const projected=roundCurrency(solvencyReport(db).accountedHb9-old+balance);if(projected>HB9_TOTAL_SUPPLY)return send(res,400,{error:'HB9 reserve adjustment exceeds fixed total supply'});}wallet.balance=roundCurrency(balance);wallet.updatedAt=new Date().toISOString();db.reserve_ledger.push({id:id('rsv'),asset,walletType,direction:'admin_set',amount:wallet.balance,balanceAfter:wallet.balance,reason:'Admin reserve adjustment',userId:u.id,createdAt:wallet.updatedAt,immutable:true});writeDB(db);return send(res,200,{message:'Reserve wallet updated',wallet,solvency:solvencyReport(db)});}
       if(p.startsWith('/api/admin/withdrawals/')&&p.endsWith('/reject')&&method==='POST'){const wd=db.withdrawals.find(x=>x.id===p.split('/')[4]);if(!wd||wd.status!=='pending')return send(res,400,{error:'Pending withdrawal not found'});wd.status='rejected';wd.rejectedAt=new Date().toISOString();wd.rejectedBy=u.id;walletEntry(db,{userId:wd.userId,asset:'USDT',direction:'unlock',amount:wd.amount,reason:'USDT withdrawal rejected',refId:wd.id});writeDB(db);return send(res,200,{message:'Withdrawal rejected and USDT unlocked',withdrawal:wd});}
       if(p.startsWith('/api/admin/withdrawals/')&&p.endsWith('/payout')&&method==='POST'){const wd=db.withdrawals.find(x=>x.id===p.split('/')[4]);if(!wd||wd.status!=='pending')return send(res,400,{error:'Pending withdrawal not found'});wd.status='approved';wd.paidAt=new Date().toISOString();wd.paidBy=u.id;walletEntry(db,{userId:wd.userId,asset:'USDT',direction:'payout',amount:wd.amount,reason:'USDT withdrawal payout',refId:wd.id});writeDB(db);return send(res,200,{message:'Withdrawal payout recorded',withdrawal:wd});}
@@ -1101,4 +1129,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson};
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances};

@@ -8,7 +8,7 @@
     "start": "node server.js",
     "seed": "node scripts/seed.js",
     "smoke": "node scripts/smoke.js",
-    "test": "node scripts/nowpayments-smoke.js"
+    "test": "node scripts/nowpayments-smoke.js && node scripts/fund-transfer-smoke.js"
   },
   "engines": {
     "node": ">=18"
