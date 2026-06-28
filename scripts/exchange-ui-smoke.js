@@ -183,7 +183,9 @@ async function tick() {
   assert(context.page.innerHTML.includes('BNB Exchange'), 'BNB selected title renders');
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected pair state renders');
   assert(context.page.innerHTML.includes('BNB Price'), 'BNB selected price card renders');
-  assert(context.page.innerHTML.includes('exchange-history-scroll'), 'conversion history uses mobile horizontal scroll wrapper');
+  assert(context.page.innerHTML.includes('exchange-history-scroll conversion-history-scroll'), 'conversion history uses direct mobile horizontal scroll wrapper');
+  assert(context.page.innerHTML.includes('conversion-history-table'), 'conversion history table has production scroll table class');
+  assert(context.page.innerHTML.includes('<th>Status</th>'), 'conversion history exposes status column');
   assert(context.page.innerHTML.includes('/assets/bnb-logo.svg'), 'BNB logo image renders from local asset');
   assert(context.page.innerHTML.includes('bnb-token-fallback'), 'BNB logo keeps fallback if image fails');
   assert(context.page.innerHTML.includes('onerror='), 'BNB logo image has no broken-image state');
@@ -253,7 +255,9 @@ async function tick() {
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'exchange-fixes.css'), 'utf8');
   assert(/\.exchange-history-scroll[\s\S]*overflow-x:\s*auto/.test(css), 'conversion history allows horizontal overflow');
   assert(/-webkit-overflow-scrolling:\s*touch/.test(css), 'conversion history uses touch momentum scrolling');
-  assert(/\.exchange-history-scroll \.table[\s\S]*min-width:\s*760px/.test(css), 'conversion history table has mobile min-width');
+  assert(/\.conversion-history-scroll[\s\S]*touch-action:\s*pan-x/.test(css), 'conversion history touch area owns pan-x gestures');
+  assert(/\.conversion-history-table[\s\S]*min-width:\s*900px/.test(css), 'conversion history table has production mobile min-width');
+  assert(/\.exchange-history-card[\s\S]*overflow:\s*visible\s*!important/.test(css), 'conversion history card does not clip horizontal scroll');
   assert(fs.existsSync(path.join(__dirname, '..', 'public', 'assets', 'bnb-logo.svg')), 'local BNB logo asset exists');
 
   console.log('exchange-ui-smoke ok');

@@ -222,6 +222,21 @@ pages.Deposit=async function(){
   if(!service.configured||!form)return;
   form.onsubmit=async event=>{event.preventDefault();const done=loading(event.submitter,'Creating...');try{const result=await api('/api/deposits',{method:'POST',body:JSON.stringify({amount:form.elements.amount.value})}),deposit=result.deposit,link=deposit.invoiceUrl||result.payment?.invoice_url||result.payment?.payment_url,payAddress=deposit.payAddress||result.payment?.pay_address,payCurrency=deposit.payCurrency||result.payment?.pay_currency;panel.style.display='flex';panel.innerHTML=`<div style="min-width:0;flex:1"><b>${esc(label(deposit))}</b>${link?`<p class="muted" style="margin:4px 0 0;overflow-wrap:anywhere">${esc(link)}</p>`:''}${payAddress?`<p class="muted" style="margin:4px 0 0;overflow-wrap:anywhere">${esc(payCurrency||'')} ${esc(payAddress)}</p>`:''}</div>${link?`<a class="ghost" style="flex:0 0 auto;text-decoration:none" href="${esc(link)}" target="_blank" rel="noopener">Pay</a>`:''}`;data.deposits=[...(data.deposits||[]),deposit];const tbody=page.querySelector('section.card.income tbody');if(tbody)tbody.insertAdjacentHTML('afterbegin',row(deposit));toast(result.message||'NOWPayments deposit created')}catch(error){toast(error.message,'error')}finally{done()}};
 };
+const profileLogoutPage=pages.Profile;
+pages.Profile=function(){
+  profileLogoutPage();
+  page.querySelector('[data-profile-logout]')?.remove();
+  page.insertAdjacentHTML('beforeend','<section class="card profile-logout-card" data-profile-logout><button class="ghost" data-logout>Logout</button></section>');
+  page.querySelector('[data-profile-logout] [data-logout]')?.addEventListener('click',logout);
+};
+const adminLogoutRender=renderAdmin;
+renderAdmin=function(adminData){
+  adminLogoutRender(adminData);
+  if(!page.querySelector('[data-admin-logout]')){
+    page.insertAdjacentHTML('afterbegin','<div class="statusrow admin-logout-row" data-admin-logout><button class="ghost" data-logout>Logout</button></div>');
+    page.querySelector('[data-admin-logout] [data-logout]')?.addEventListener('click',logout);
+  }
+};
 applyPresentation();
 app.addEventListener('click',e=>{const bottom=e.target.closest('[data-bottom-view]');if(bottom){view=bottom.dataset.bottomView;render();return}if(e.target.closest('[data-mobile-menu]')){e.preventDefault();e.stopPropagation();openMobileDrawer();return}if(e.target.closest('[data-transfer]')){confirmAction('Transfer','Transfer feature coming soon in demo','Close');return}const quick=e.target.closest('[data-quick-view]');if(quick){view=quick.dataset.quickView;render();return}const button=e.target.closest('[data-copy-wallet]');if(button)copyWalletAddress(button.dataset.copyWallet)});
 window.addEventListener('pageshow',event=>{if(event.persisted&&!localStorage.hb9token){token=null;me=null;data=null;auth('login')}});

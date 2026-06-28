@@ -60,6 +60,8 @@ async function request(base, route, { method = 'GET', token, body } = {}) {
 
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'latin1');
   assert(appSource.includes('data-logout'), 'logout controls should be present');
+  assert(appSource.includes('data-profile-logout'), 'profile page should contain a logout control');
+  assert(appSource.includes('data-admin-logout'), 'admin panel should contain a logout control');
   assert(appSource.includes('/api/auth/logout'), 'frontend should call logout API');
   assert(appSource.includes('clearAuthState'), 'frontend should clear cached auth state');
   assert(appSource.includes("adminLogout?'/admin':'/'"), 'admin logout should redirect to /admin');

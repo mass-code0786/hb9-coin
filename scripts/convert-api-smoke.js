@@ -79,6 +79,14 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   assert.strictEqual(dashboard.wallets.hb9, 500);
   assert.strictEqual(dashboard.wallets.bnb, 1);
   assert.strictEqual(dashboard.conversions.length, 2);
+  assert(dashboard.conversions.some(item => item.toAsset === 'BNB' && item.toAmount === 1), 'Conversion history exposes BNB toAmount');
+
+  const diagnostic = await request(base, `/api/admin/diagnostics/bnb-wallet?userId=${user.id}`, { token });
+  assert.strictEqual(diagnostic.asset, 'BNB');
+  assert.strictEqual(diagnostic.credits, 1);
+  assert.strictEqual(diagnostic.debits, 0);
+  assert.strictEqual(diagnostic.computedBalance, 1);
+  assert.strictEqual(diagnostic.dashboardBalance, 1);
 
   await assert.rejects(
     () => request(base, '/api/convert', {

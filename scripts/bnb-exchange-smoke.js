@@ -4,6 +4,7 @@ process.env.BNB_USDT_FALLBACK_PRICE = '600';
 const assert = require('assert');
 const {
   adminFundTransfer,
+  bnbLedgerDiagnostic,
   convertUsdtToAsset,
   createStake,
   dashboard,
@@ -149,6 +150,15 @@ function dbFixture() {
   );
   await adminFundTransfer(db, admin, { userId: user.id, asset: 'BNB', action: 'credit', amount: 0.25, reason: 'admin bnb smoke' });
   assert.strictEqual(walletBalances(db, user.id).bnb, 0.75);
+  const originalConversions = db.conversions;
+  db.conversions = db.conversions.filter(item => item.toAsset !== 'BNB');
+  assert.strictEqual(walletBalances(db, user.id).bnb, 0.75, 'BNB balance must still compute from BNB wallet ledger credits/debits if conversion rows are unavailable');
+  const diagnostic = bnbLedgerDiagnostic(db, user.id);
+  assert.strictEqual(diagnostic.credits, 1.25);
+  assert.strictEqual(diagnostic.debits, 0.5);
+  assert.strictEqual(diagnostic.computedBalance, 0.75);
+  assert.strictEqual(diagnostic.dashboardBalance, 0.75);
+  db.conversions = originalConversions;
 
   console.log('bnb-exchange-smoke ok');
 })().catch(error => {

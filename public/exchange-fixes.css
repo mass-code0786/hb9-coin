@@ -34,7 +34,12 @@
   border: 1px solid rgba(0, 0, 0, .12);
 }
 
-.exchange-history-scroll {
+.exchange-history-card {
+  overflow: visible !important;
+}
+
+.exchange-history-scroll,
+.conversion-history-scroll {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
@@ -42,29 +47,51 @@
   padding-bottom: 10px;
   touch-action: pan-x;
   overscroll-behavior-x: contain;
+  scrollbar-width: thin;
 }
 
-.exchange-history-scroll::after {
-  content: "Swipe to see more";
+.exchange-history-scroll::-webkit-scrollbar,
+.conversion-history-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+
+.exchange-history-scroll::-webkit-scrollbar-thumb,
+.conversion-history-scroll::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(168, 85, 247, .65);
+}
+
+.exchange-history-scroll::after,
+.conversion-history-scroll::after {
+  content: "Swipe left/right to see all columns";
   display: block;
   margin-top: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
-.exchange-history-scroll .tablewrap {
-  min-width: 760px;
+.exchange-history-scroll .tablewrap,
+.conversion-history-scroll .tablewrap,
+.conversion-history-tablewrap {
+  min-width: 900px;
   width: max-content;
   max-width: none;
-  overflow: visible;
+  overflow: visible !important;
+  border-radius: 12px;
 }
 
-.exchange-history-scroll .table {
-  min-width: 760px;
-  width: 760px;
+.exchange-history-scroll .table,
+.conversion-history-scroll .table,
+.conversion-history-table {
+  min-width: 900px;
+  width: max-content;
+  max-width: none;
 }
 
 .exchange-history-scroll th,
-.exchange-history-scroll td {
+.exchange-history-scroll td,
+.conversion-history-scroll th,
+.conversion-history-scroll td {
   white-space: nowrap;
 }
