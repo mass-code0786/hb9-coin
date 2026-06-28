@@ -55,7 +55,29 @@ const datePlus = (date, days) => { const d = new Date(date); d.setDate(d.getDate
 const roundCurrency = value => Math.round((value + Number.EPSILON) * 100) / 100;
 const hash = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(password, salt, 64).toString('hex') });
 const check = (password, user) => crypto.timingSafeEqual(Buffer.from(hash(password, user.salt).hash, 'hex'), Buffer.from(user.passwordHash, 'hex'));
-function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); if(repairBep20RawUnitAmounts(db).corrected)writeDB(db); return db; }
+let adminBootstrapLogged=false;
+function ensureBootstrapAdmin(db){
+  const email=String(process.env.BOOTSTRAP_ADMIN_EMAIL||'').trim().toLowerCase(), password=process.env.BOOTSTRAP_ADMIN_PASSWORD;
+  if(!email)return false;
+  db.users=db.users||[];
+  const now=new Date().toISOString();
+  let changed=false, created=false, user=db.users.find(item=>String(item.email||'').toLowerCase()===email);
+  if(!user){
+    if(!password)return false;
+    const admin=hash(password);
+    user={id:'usr_admin',name:process.env.BOOTSTRAP_ADMIN_NAME||'HB9 Admin',email,role:'admin',status:'active',blocked:false,passwordHash:admin.hash,salt:admin.salt,walletAddress:null,createdAt:now};
+    db.users.push(user);
+    changed=true;created=true;
+  }
+  if(user.role!=='admin'){user.role='admin';changed=true;}
+  if(user.status!=='active'){user.status='active';changed=true;}
+  if(user.blocked!==false){user.blocked=false;changed=true;}
+  let passwordUpdated=false;
+  if(password){let matches=false;try{matches=Boolean(user.passwordHash&&user.salt&&check(password,user));}catch(_){matches=false;}if(!matches){const admin=hash(password);user.passwordHash=admin.hash;user.salt=admin.salt;changed=true;passwordUpdated=true;}}
+  if(!adminBootstrapLogged){console.log('ADMIN_BOOTSTRAP_READY',{email:user.email,userId:user.id,created,passwordUpdated});adminBootstrapLogged=true;}
+  return changed;
+}
+function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const repaired=repairBep20RawUnitAmounts(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(repaired||bootstrapped)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
 function normalizeRuntimeAddress(address){try{const value=String(address||'').trim();return isAddress(value)?getAddress(value).toLowerCase():null;}catch(_){return null;}}
 function runtimeStorageDiagnostics(db=readDB()){
@@ -388,6 +410,7 @@ function deterministicInt(seed, min, max) {
   const span=Math.max(1,high-low+1), seedNum=[...seed].reduce((n,c)=>n+c.charCodeAt(0),0);
   return low+(seedNum%span);
 }
+function globalTeamUnits(valueUsd){return Math.round((Number(valueUsd)||0)/0.02);}
 function audit(db,type,details){db.auditLogs=db.auditLogs||[];const record={id:id('aud'),type,details,createdAt:new Date().toISOString()};db.auditLogs.push(record);if(/^(GLOBAL_TEAM|ROI)_/.test(type))console.log(type,{...details,createdAt:record.createdAt});}
 function emitDepositAddressLog(db,type,details){console.warn(type,details);audit(db,type,details);}
 function normalizeChain(chain){return String(chain||'BSC').trim().toUpperCase();}
@@ -1030,7 +1053,7 @@ function globalForDate(db,userId,date,hb9PriceOverride=null,{roi=true,logDuplica
   if (existing && existingRoi) {if(logDuplicates)audit(db,roi?'ROI_SKIP_DUPLICATE':'GLOBAL_TEAM_SKIP_DUPLICATE',{userId,date});return {created:false,duplicate:true};}
   const context=incomeContext(db,userId,date,hb9PriceOverride), createdAt=new Date().toISOString();
   if(!roi){
-    const globalRecord={activity:context.totalGlobalTeam,value:context.globalTeamValueUsd,paid:0,unpaid:context.globalTeamValueUsd,globalTeamCount:context.totalGlobalTeam,...context,roiPending:true};
+    const globalRecord={activity:context.totalGlobalTeam,value:context.globalTeamValueUsd,paid:0,unpaid:context.globalTeamValueUsd,paidGlobalTeam:0,unpaidGlobalTeam:globalTeamUnits(context.globalTeamValueUsd),globalTeamCount:context.totalGlobalTeam,...context,roiPending:true};
     if (existing) Object.assign(existing,globalRecord,{reconciledAt:createdAt});
     else db.globalTeamRecords.push({id:id('gbl'),userId,date,...globalRecord,createdAt});
     return {created:!existing,duplicate:false};
@@ -1050,7 +1073,7 @@ function globalForDate(db,userId,date,hb9PriceOverride=null,{roi=true,logDuplica
     }
   }
   const paid=creditedB1Usd, unpaid=roundCurrency(context.flushUsd+(incomeStatus==='queued'?context.creditedB1Usd:0));
-  const globalRecord={activity:context.totalGlobalTeam,value:context.globalTeamValueUsd,paid,unpaid,globalTeamCount:context.totalGlobalTeam,...context,roiPending:false,roiProcessedAt:createdAt};
+  const globalRecord={activity:context.totalGlobalTeam,value:context.globalTeamValueUsd,paid,unpaid,paidGlobalTeam:globalTeamUnits(paid),unpaidGlobalTeam:globalTeamUnits(unpaid),globalTeamCount:context.totalGlobalTeam,...context,roiPending:false,roiProcessedAt:createdAt};
   if (existing) Object.assign(existing,globalRecord,{reconciledAt:createdAt});
   else db.globalTeamRecords.push({id:id('gbl'),userId,date,...globalRecord,createdAt});
   const flushRecord={incomeType:'B1 / Global Team',eligibleIncome:context.b1EligibleUsd,paidIncome:paid,flushedIncome:context.flushUsd,burnStatus:'Burned Forever',withdrawable:false,recoverable:false,...context,createdAt};
@@ -1159,7 +1182,9 @@ function dashboard(db,u) {
   const allStakes=db.stakes.filter(s=>s.userId===u.id), withdrawals=db.withdrawals.filter(x=>x.userId===u.id), deposits=db.deposits.filter(x=>x.userId===u.id), balances=walletBalances(db,u.id);
   const salary=salaryReport(db,u.id);
   const globalPoints=globalPointSummary(db,u.id);
-  return {user:safeUser(u),settings:{...db.settings,market:marketSettings(db)},depositService:depositServiceStatus(),sweepService:sweepServiceStatus(),wallets:{...balances,withdrawal:balances.withdrawableUsdt},supply:solvencyReport(db),stats:{totalStake:allStakes.reduce((n,s)=>n+s.amount,0),activeStake:stake,totalStakeHb9:allStakes.reduce((n,s)=>n+s.coinAmount,0),activeStakeHb9:activeStakeHb9(db,u.id),totalDeposit:balances.totalDeposit,totalWithdrawal:withdrawals.filter(x=>x.status!=='rejected').reduce((n,x)=>n+x.amount,0),directTeam:direct.length,qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,directBusiness:completed,requiredBusiness:required,remainingBusiness:Math.max(0,required-completed),currentGlobalTeam:globalPoints.currentGlobalTeam,globalPoints:globalPoints.globalPoints,lastGlobalPointUpdate:globalPoints.lastGlobalPointUpdate},globalPoints,income:{todayReferral:referrals.filter(x=>x.date===today()&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),totalReferral:referrals.filter(x=>!x.status||x.status==='credited').reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),todayLevelIncome:creditedLevelIncome.filter(x=>String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalLevelIncome:creditedLevelIncome.reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todaySalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited'&&String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalSalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todayB1:b1.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),totalB1:b1.reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),paidGlobal:globals.reduce((n,x)=>n+x.paid,0),unpaidGlobal:globals.reduce((n,x)=>n+x.unpaid,0),todayFlush:flushes.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),totalFlush:flushes.reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),eligible:stake>0&&completed>=required},salary,levelUnlock:{qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,requiredStakeUsd:LEVEL_DIRECT_MIN_STAKE_USD,maxLevel:LEVEL_INCOME_PERCENTS.length},b1Records:b1.map(x=>({date:x.date,fromUser:u.name,amount:Number(x.hb9Amount)||Number(x.amount)||0,valueUsd:x.valueUsd,status:x.status})),levelIncomeRecords:levelIncome,deposits,stakes:allStakes,team:direct.map(x=>({id:x.id,name:x.name,email:x.email,joinedAt:x.createdAt,activeStakeUsd:activeStakeUsd(db,x.id)})),referrals,globals,flushes,withdrawals};
+  const paidGlobalValue=roundCurrency(globals.reduce((n,x)=>n+(Number(x.paid)||0),0)), unpaidGlobalValue=roundCurrency(globals.reduce((n,x)=>n+(Number(x.unpaid)||0),0));
+  const paidGlobal=globalTeamUnits(paidGlobalValue), unpaidGlobal=globalTeamUnits(unpaidGlobalValue);
+  return {user:safeUser(u),settings:{...db.settings,market:marketSettings(db)},depositService:depositServiceStatus(),sweepService:sweepServiceStatus(),wallets:{...balances,withdrawal:balances.withdrawableUsdt},supply:solvencyReport(db),stats:{totalStake:allStakes.reduce((n,s)=>n+s.amount,0),activeStake:stake,totalStakeHb9:allStakes.reduce((n,s)=>n+s.coinAmount,0),activeStakeHb9:activeStakeHb9(db,u.id),totalDeposit:balances.totalDeposit,totalWithdrawal:withdrawals.filter(x=>x.status!=='rejected').reduce((n,x)=>n+x.amount,0),directTeam:direct.length,qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,directBusiness:completed,requiredBusiness:required,remainingBusiness:Math.max(0,required-completed),currentGlobalTeam:globalPoints.currentGlobalTeam,globalPoints:globalPoints.globalPoints,lastGlobalPointUpdate:globalPoints.lastGlobalPointUpdate},globalPoints,income:{todayReferral:referrals.filter(x=>x.date===today()&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),totalReferral:referrals.filter(x=>!x.status||x.status==='credited').reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),todayLevelIncome:creditedLevelIncome.filter(x=>String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalLevelIncome:creditedLevelIncome.reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todaySalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited'&&String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalSalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todayB1:b1.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),totalB1:b1.reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),paidGlobal,unpaidGlobal,paidGlobalValue,unpaidGlobalValue,todayFlush:flushes.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),totalFlush:flushes.reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),eligible:stake>0&&completed>=required},salary,levelUnlock:{qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,requiredStakeUsd:LEVEL_DIRECT_MIN_STAKE_USD,maxLevel:LEVEL_INCOME_PERCENTS.length},b1Records:b1.map(x=>({date:x.date,fromUser:u.name,amount:Number(x.hb9Amount)||Number(x.amount)||0,valueUsd:x.valueUsd,status:x.status})),levelIncomeRecords:levelIncome,deposits,stakes:allStakes,team:direct.map(x=>({id:x.id,name:x.name,email:x.email,joinedAt:x.createdAt,activeStakeUsd:activeStakeUsd(db,x.id)})),referrals,globals,flushes,withdrawals};
 }
 const server=http.createServer(async(req,res)=>{
   try {
@@ -1218,4 +1243,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log('DAILY_SCHEDULER_UTC',{globalTeam:'17:30',roi:'18:00'});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};
