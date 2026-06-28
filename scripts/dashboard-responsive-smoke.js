@@ -7,6 +7,8 @@ const app = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
 const mobileCss = fs.readFileSync(path.join(root, 'public', 'mobile-defi-dashboard.css'), 'utf8');
 
 const expectedDashboardContent = [
+  'Total Deposit',
+  'Total Withdrawal',
   'Total Stake',
   'Active Stake',
   'Direct Team',
@@ -31,6 +33,14 @@ const expectedDashboardContent = [
 
 for (const label of expectedDashboardContent) {
   assert(app.includes(label), `dashboard source must render ${label}`);
+}
+
+assert(!app.includes('const supplyDashboardPage=pages.Dashboard'), 'user dashboard must not wrap Dashboard to inject HB9 Supply');
+assert(!/pages\.Dashboard=function\(\)\{[^}]*HB9 Supply/.test(app), 'user dashboard must not render an HB9 Supply section');
+
+const adminReserves = /adminTab==='Reserves'[\s\S]*?body=`([\s\S]*?)`;/.exec(app)?.[1] || '';
+for (const label of ['Total HB9 Supply', 'HB9 Reserve', 'Circulating HB9', 'Total Burned HB9', 'Remaining Supply', 'USDT Reserve']) {
+  assert(adminReserves.includes(label), `admin reserves must still render ${label}`);
 }
 
 assert(
