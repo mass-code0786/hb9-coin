@@ -2,20 +2,54 @@
   if (typeof pages === 'undefined' || typeof api === 'undefined') return;
 
   const EXCHANGE_ASSET_KEY = 'hb9ExchangeAsset';
-  const selectedExchangeAsset = () => localStorage.getItem(EXCHANGE_ASSET_KEY) || 'BNB';
-  const setExchangeAsset = asset => localStorage.setItem(EXCHANGE_ASSET_KEY, asset);
+  let activeExchangeAsset = 'BNB';
+  let exchangeRenderId = 0;
+  let exchangeTimers = [];
+  const normalizeExchangeAsset = asset => ['HB9', 'BNB'].includes(String(asset || '').toUpperCase()) ? String(asset).toUpperCase() : 'BNB';
+  const selectedExchangeAsset = () => normalizeExchangeAsset(localStorage.getItem(EXCHANGE_ASSET_KEY) || activeExchangeAsset || 'BNB');
+  const setExchangeAsset = asset => {
+    activeExchangeAsset = normalizeExchangeAsset(asset);
+    localStorage.setItem(EXCHANGE_ASSET_KEY, activeExchangeAsset);
+  };
+  const clearExchangeTimers = () => {
+    exchangeTimers.forEach(timer => timer.type === 'timeout' ? clearTimeout(timer.id) : clearInterval(timer.id));
+    exchangeTimers = [];
+  };
+  const trackExchangeInterval = (fn, delay) => {
+    const id = setInterval(fn, delay);
+    exchangeTimers.push({ type: 'interval', id });
+    return id;
+  };
+  const trackExchangeTimeout = (fn, delay) => {
+    const id = setTimeout(fn, delay);
+    exchangeTimers.push({ type: 'timeout', id });
+    return id;
+  };
   const assetLogo = asset => asset === 'HB9'
     ? HB9CoinLogo('hb9-coin-logo hb9-coin-logo--swap')
     : `<span class="swap-token-badge" style="font-weight:800">BNB</span>`;
   const walletLine = (label, value, suffix = '') => `<div><small>${label}</small><b class="wallet-balance-line">${value}${suffix}</b></div>`;
 
-  function renderMarketTradingView(symbol, interval = 'D') {
-    const container = page.querySelector('#hb9-tradingview-chart');
+  function renderMarketTradingView(symbol, interval = 'D', asset = activeExchangeAsset, renderId = exchangeRenderId) {
+    const container = page.querySelector('[data-tradingview-container]');
     if (!container) return;
-    container.innerHTML = '';
+    const containerId = container.id;
+    container.dataset.chartSymbol = symbol;
+    container.dataset.chartInterval = interval;
+    container.classList.remove('chart-unavailable');
+    container.innerHTML = '<span class="chart-loading">Loading chart...</span>';
+    const stillCurrent = () => activeExchangeAsset === asset && exchangeRenderId === renderId && document.body.contains(container) && container.dataset.chartSymbol === symbol;
+    const unavailable = message => {
+      if (!stillCurrent()) return;
+      container.classList.add('chart-unavailable');
+      container.textContent = message || 'Chart temporarily unavailable';
+    };
     const draw = () => {
-      if (!window.TradingView || !document.body.contains(container)) return;
-      new TradingView.widget({
+      if (!stillCurrent()) return;
+      if (!window.TradingView?.widget) return unavailable('TradingView script failed to load');
+      try {
+        container.innerHTML = '';
+        new window.TradingView.widget({
         autosize: true,
         symbol,
         interval,
@@ -28,25 +62,37 @@
         hide_top_toolbar: false,
         hide_legend: false,
         save_image: false,
-        container_id: 'hb9-tradingview-chart'
-      });
+        allow_symbol_change: false,
+        container_id: containerId
+        });
+        trackExchangeTimeout(() => {
+          if (stillCurrent() && !container.querySelector('iframe')) unavailable('Chart temporarily unavailable');
+        }, 8000);
+      } catch (error) {
+        unavailable('Chart temporarily unavailable');
+      }
     };
-    if (typeof loadTradingViewScript === 'function') loadTradingViewScript(draw);
+    if (typeof loadTradingViewScript === 'function') loadTradingViewScript().then(draw).catch(() => unavailable('TradingView script failed to load'));
     else draw();
   }
 
   pages['HB9 Exchange'] = function(){
+    clearExchangeTimers();
     const b = data.wallets || {};
-    let asset = selectedExchangeAsset();
-    if (!['HB9', 'BNB'].includes(asset)) asset = 'BNB';
+    const asset = selectedExchangeAsset();
+    activeExchangeAsset = asset;
+    const renderId = ++exchangeRenderId;
     const market = data.settings.market || { fallbackPrice: data.settings.hb9Price, priceOffset: .09, spreadPercent: 0 };
     let price = asset === 'HB9' ? Number(market.fallbackPrice || data.settings.hb9Price) : null;
     let buyPrice = asset === 'HB9' ? Number(market.fallbackPrice || data.settings.hb9Price) + Number(market.priceOffset || .09) : null;
     const pair = asset === 'HB9' ? 'HB9USDT' : 'BNBUSDT';
+    const chartSymbol = asset === 'HB9' ? 'BINANCE:ICPUSDT' : 'BINANCE:BNBUSDT';
     const title = asset === 'HB9' ? 'HB9 Exchange' : 'BNB Exchange';
     const subtitle = asset === 'HB9' ? 'HB9USDT market chart' : 'Live BNBUSDT market chart';
     const sourceLabel = asset === 'HB9' ? 'Loading HB9...' : 'Loading BNB...';
     const walletAsset = asset === 'HB9' ? Number(b.hb9 || 0) : Number(b.bnb || 0);
+    const selectedWalletLine = asset === 'HB9' ? walletLine('HB9 Wallet', `${points(walletAsset)} HB9`) : walletLine('BNB Wallet', `${points(walletAsset)} BNB`);
+    const chartContainerId = `exchange-tradingview-${asset.toLowerCase()}-${Date.now()}`;
     const historyRows = (data.conversions || [])
       .filter(x => (x.toAsset || (x.hb9Amount ? 'HB9' : '')).toUpperCase() === asset)
       .slice().reverse().slice(0, 12)
@@ -58,7 +104,7 @@
         return `<tr><td>${String(x.createdAt || '').slice(0, 10)}</td><td>${esc(fromAsset)}</td><td>${esc(toAsset)}</td><td>${money(fromAmount)}</td><td>${points(toAmount)} ${esc(toAsset)}</td><td>${money(x.price ?? x.buyPrice ?? x.rate ?? 0)}</td></tr>`;
       }).join('');
 
-    page.innerHTML = `<section class="exchange-page"><section class="card exchange-chart hb9-tv-card"><div class="income-header"><div><h2>${title}</h2><p class="muted">${subtitle}</p></div><div class="statusrow"><div class="tabs"><button class="${asset === 'HB9' ? 'active' : ''}" data-exchange-asset="HB9">HB9</button><button class="${asset === 'BNB' ? 'active' : ''}" data-exchange-asset="BNB">BNB</button></div><b class="exchange-price">Loading...</b></div></div><div class="chart-controls hb9-tv-controls"><button data-tv-interval="15">15m</button><button data-tv-interval="60">1H</button><button data-tv-interval="240">4H</button><button class="active" data-tv-interval="D">1D</button><small class="market-status">${sourceLabel}</small></div><div id="hb9-tradingview-chart" class="tradingview-chart" aria-label="${pair} TradingView candlestick chart"></div><div class="exchange-market exchange-market-clean"><div><small>${asset} Price</small><b data-market-base>Loading...</b></div><div><small>Pair</small><b data-market-pair>${pair}</b></div></div></section><section class="card exchange-wallets">${walletLine('USDT Wallet', money(b.usdt || 0))}${walletLine('HB9 Wallet', `${points(b.hb9 || 0)} HB9`)}${walletLine('BNB Wallet', `${points(b.bnb || 0)} BNB`)}</section><section class="card exchange-convert hb9-swap-card"><div class="swap-balance"><small>USDT Wallet</small><b>${money(b.usdt || 0)}</b></div><form id="exchange-form" class="swap-box"><div class="swap-field"><label>USDT Amount</label><div class="swap-input-row"><span class="swap-token-badge" role="img" aria-label="USDT" title="USDT">${USDTLogo('usdt-coin-logo usdt-coin-logo--swap')}</span><input name="swapAmount" type="number" min="0.01" max="${Number(b.usdt || 0)}" step="0.01" autocomplete="off"></div></div><button class="swap-reverse" type="button" disabled title="Backend-priced conversion">USDT</button><div class="swap-field"><label>${asset} You Receive</label><div class="swap-input-row output"><span data-receive-logo class="swap-token-badge" role="img" aria-label="${asset}" title="${asset}">${assetLogo(asset)}</span><input name="swapOutput" readonly value="0 ${asset}"></div></div><button class="primary swap-submit">Convert to ${asset}</button></form></section><section class="card"><h2>Conversion History</h2>${table(['Date','From','To','From Amount','To Amount','Price'], historyRows, 'No conversions yet', 'USDT conversions will appear here.')}</section></section>`;
+    page.innerHTML = `<section class="exchange-page" data-selected-asset="${asset}" data-selected-pair="${pair}" data-chart-symbol="${chartSymbol}"><section class="card exchange-chart hb9-tv-card"><div class="income-header"><div><h2>${title}</h2><p class="muted">${subtitle}</p></div><div class="statusrow"><div class="tabs"><button class="${asset === 'HB9' ? 'active' : ''}" data-exchange-asset="HB9">HB9</button><button class="${asset === 'BNB' ? 'active' : ''}" data-exchange-asset="BNB">BNB</button></div><b class="exchange-price">Loading...</b></div></div><div class="chart-controls hb9-tv-controls"><button data-tv-interval="15">15m</button><button data-tv-interval="60">1H</button><button data-tv-interval="240">4H</button><button class="active" data-tv-interval="D">1D</button><small class="market-status">${sourceLabel}</small></div><div id="${chartContainerId}" data-tradingview-container class="tradingview-chart" aria-label="${pair} TradingView candlestick chart"></div><div class="exchange-market exchange-market-clean"><div><small data-price-label>${asset} Price</small><b data-market-base>Loading...</b></div><div><small>Pair</small><b data-market-pair>${pair}</b></div></div></section><section class="card exchange-wallets">${walletLine('USDT Wallet', money(b.usdt || 0))}${selectedWalletLine}</section><section class="card exchange-convert hb9-swap-card"><div class="swap-balance"><small>USDT Wallet</small><b>${money(b.usdt || 0)}</b></div><form id="exchange-form" class="swap-box"><div class="swap-field"><label>USDT Amount</label><div class="swap-input-row"><span class="swap-token-badge" role="img" aria-label="USDT" title="USDT">${USDTLogo('usdt-coin-logo usdt-coin-logo--swap')}</span><input name="swapAmount" type="number" min="0.01" max="${Number(b.usdt || 0)}" step="0.01" autocomplete="off"></div></div><button class="swap-reverse" type="button" disabled title="Backend-priced conversion">USDT</button><div class="swap-field"><label>${asset} You Receive</label><div class="swap-input-row output"><span data-receive-logo class="swap-token-badge" role="img" aria-label="${asset}" title="${asset}">${assetLogo(asset)}</span><input name="swapOutput" readonly value="0 ${asset}"></div></div><button class="primary swap-submit">Convert to ${asset}</button></form></section><section class="card"><h2>Conversion History</h2>${table(['Date','From','To','From Amount','To Amount','Price'], historyRows, 'No conversions yet', 'USDT conversions will appear here.')}</section></section>`;
 
     const form = page.querySelector('#exchange-form');
     const amount = form.elements.swapAmount;
@@ -69,23 +115,31 @@
       output.value = value && buyPrice ? `${points(value / buyPrice)} ${asset}` : `0 ${asset}`;
     };
     const updateTicker = async () => {
+      const requestAsset = asset;
+      const requestRenderId = renderId;
+      if (activeExchangeAsset !== requestAsset || exchangeRenderId !== requestRenderId) return;
       try {
         const ticker = await api(asset === 'HB9' ? '/api/market/hb9-ticker' : '/api/market/bnb-ticker');
+        if (activeExchangeAsset !== requestAsset || exchangeRenderId !== requestRenderId) return;
         if (asset === 'HB9') {
           price = Number(ticker.hb9BasePrice ?? ticker.icpPrice ?? ticker.price);
           buyPrice = Number(ticker.hb9BuyPrice);
-          status.textContent = ticker.source === 'manual_override' ? 'Manual override' : 'Live ICPUSDT';
+          status.textContent = ticker.source === 'manual_override' ? 'Manual override' : 'Live HB9USDT';
         } else {
           price = Number(ticker.price);
           buyPrice = price;
           status.textContent = ticker.source === 'fallback' ? 'BNB fallback price' : 'Live BNBUSDT';
         }
+        const root = page.querySelector(`[data-selected-asset="${asset}"][data-selected-pair="${pair}"]`);
+        if (!root) return;
         page.querySelector('.exchange-price').textContent = money(price);
         page.querySelector('[data-market-base]').textContent = money(price);
         page.querySelector('[data-market-pair]').textContent = pair;
+        page.querySelector('[data-price-label]').textContent = `${asset} Price`;
         status.classList.remove('error');
         syncOutput();
       } catch (error) {
+        if (activeExchangeAsset !== requestAsset || exchangeRenderId !== requestRenderId) return;
         status.textContent = 'Market data unavailable';
         status.classList.add('error');
       }
@@ -100,7 +154,7 @@
     page.querySelectorAll('[data-tv-interval]').forEach(button => {
       button.onclick = () => {
         page.querySelectorAll('[data-tv-interval]').forEach(item => item.classList.toggle('active', item === button));
-        renderMarketTradingView(asset === 'HB9' ? 'BINANCE:ICPUSDT' : 'BINANCE:BNBUSDT', button.dataset.tvInterval);
+        renderMarketTradingView(chartSymbol, button.dataset.tvInterval, asset, renderId);
       };
     });
     amount.oninput = syncOutput;
@@ -122,11 +176,12 @@
         done();
       }
     };
-    renderMarketTradingView(asset === 'HB9' ? 'BINANCE:ICPUSDT' : 'BINANCE:BNBUSDT', 'D');
+    renderMarketTradingView(chartSymbol, 'D', asset, renderId);
     updateTicker();
-    const timer = setInterval(() => {
-      if (!document.body.contains(page.querySelector('#hb9-tradingview-chart'))) {
-        clearInterval(timer);
+    trackExchangeInterval(() => {
+      if (activeExchangeAsset !== asset || exchangeRenderId !== renderId) return;
+      if (!document.body.contains(page.querySelector(`#${chartContainerId}`))) {
+        clearExchangeTimers();
         return;
       }
       updateTicker();
