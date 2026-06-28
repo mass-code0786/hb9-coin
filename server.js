@@ -55,6 +55,9 @@ const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 const today = () => new Date().toISOString().slice(0, 10);
 const datePlus = (date, days) => { const d = new Date(date); d.setDate(d.getDate() + days); return d.toISOString().slice(0,10); };
 const roundCurrency = value => Math.round((value + Number.EPSILON) * 100) / 100;
+const roundDecimals = (value, decimals) => Math.round((Number(value) + Number.EPSILON) * 10 ** decimals) / 10 ** decimals;
+const truncateDecimals = (value, decimals) => Math.trunc(Number(value) * 10 ** decimals) / 10 ** decimals;
+const roundAssetAmount = (asset, value) => String(asset||'').toUpperCase()==='BNB' ? truncateDecimals(value, 8) : roundCurrency(Number(value));
 const hash = (password, salt = crypto.randomBytes(16).toString('hex')) => ({ salt, hash: crypto.scryptSync(password, salt, 64).toString('hex') });
 const check = (password, user) => crypto.timingSafeEqual(Buffer.from(hash(password, user.salt).hash, 'hex'), Buffer.from(user.passwordHash, 'hex'));
 let adminBootstrapLogged=false;
@@ -79,7 +82,7 @@ function ensureBootstrapAdmin(db){
   if(!adminBootstrapLogged){console.log('ADMIN_BOOTSTRAP_READY',{email:user.email,userId:user.id,created,passwordUpdated});adminBootstrapLogged=true;}
   return changed;
 }
-function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const repaired=repairBep20RawUnitAmounts(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(repaired||bootstrapped)writeDB(db); return db; }
+function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const repaired=repairBep20RawUnitAmounts(db).corrected, bnbRepaired=repairBnbConversionPrecision(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(repaired||bnbRepaired||bootstrapped)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
 function normalizeRuntimeAddress(address){try{const value=String(address||'').trim();return isAddress(value)?getAddress(value).toLowerCase():null;}catch(_){return null;}}
 function runtimeStorageDiagnostics(db=readDB()){
@@ -175,7 +178,7 @@ function ensureSupply(db){
   db.hb9_supply.totalSupply=HB9_TOTAL_SUPPLY;
   db.hb9_supply.fixed=true;
   db.reserve_wallets=db.reserve_wallets||[];
-  const ensure=(asset,walletType,balance=0)=>{let wallet=db.reserve_wallets.find(x=>x.asset===asset&&x.walletType===walletType);if(!wallet){wallet={id:id('res'),asset,walletType,balance,lockedBalance:0,createdAt:now,updatedAt:now};db.reserve_wallets.push(wallet);}wallet.balance=roundCurrency(Number(wallet.balance)||0);wallet.lockedBalance=roundCurrency(Number(wallet.lockedBalance)||0);return wallet;};
+  const ensure=(asset,walletType,balance=0)=>{let wallet=db.reserve_wallets.find(x=>x.asset===asset&&x.walletType===walletType);if(!wallet){wallet={id:id('res'),asset,walletType,balance,lockedBalance:0,createdAt:now,updatedAt:now};db.reserve_wallets.push(wallet);}wallet.balance=roundAssetAmount(asset,Number(wallet.balance)||0);wallet.lockedBalance=roundAssetAmount(asset,Number(wallet.lockedBalance)||0);return wallet;};
   ensure('HB9','exchange',0);ensure('HB9','income',0);ensure('USDT','treasury',0);ensure('BNB','exchange',0);
   db.reserve_ledger=db.reserve_ledger||[];db.burn_ledger=db.burn_ledger||[];db.wallet_ledger=db.wallet_ledger||[];db.exchange_orders=db.exchange_orders||[];db.income_emissions=db.income_emissions||[];db.level_income_ledger=db.level_income_ledger||[];
   ensureSalaryTables(db);
@@ -189,9 +192,9 @@ function ensureSalaryTables(db){
 }
 function reserveWallet(db,asset,walletType){ensureSupply(db);return db.reserve_wallets.find(x=>x.asset===asset&&x.walletType===walletType);}
 function reserveMove(db,{asset,walletType,direction,amount,reason,refId,userId}){
-  const value=roundCurrency(Number(amount));
+  const value=roundAssetAmount(asset,Number(amount));
   if(!Number.isFinite(value)||value<0)throw Error('Invalid reserve amount');
-  const wallet=reserveWallet(db,asset,walletType), sign=direction==='credit'?1:-1, next=roundCurrency(wallet.balance+(value*sign));
+  const wallet=reserveWallet(db,asset,walletType), sign=direction==='credit'?1:-1, next=roundAssetAmount(asset,wallet.balance+(value*sign));
   if(next<0)throw Error(`${asset} ${walletType} reserve is insufficient`);
   wallet.balance=next;wallet.updatedAt=new Date().toISOString();
   const entry={id:id('rsv'),asset,walletType,direction,amount:value,balanceAfter:wallet.balance,reason,refId,userId,createdAt:wallet.updatedAt,immutable:true};
@@ -200,7 +203,7 @@ function reserveMove(db,{asset,walletType,direction,amount,reason,refId,userId})
 }
 function burnHb9(db,{amount,reason,refId,userId}){
   ensureSupply(db);
-  const value=roundCurrency(Number(amount));
+  const value=roundAssetAmount(normalizedAsset,Number(amount));
   if(!Number.isFinite(value)||value<=0)throw Error('Invalid burn amount');
   const burned=roundCurrency((db.burn_ledger||[]).reduce((n,x)=>n+(Number(x.amount)||0),0)+value);
   if(burned>HB9_TOTAL_SUPPLY)throw Error('HB9 burn exceeds total supply');
@@ -210,14 +213,51 @@ function burnHb9(db,{amount,reason,refId,userId}){
 }
 function walletEntry(db,{userId,asset,direction,amount,reason,refId,type}) {
   ensureSupply(db);
-  const entry={id:id('wlt'),userId,asset,direction,amount:roundCurrency(Number(amount)),reason,refId,type,createdAt:new Date().toISOString(),immutable:true};
+  const entry={id:id('wlt'),userId,asset,direction,amount:roundAssetAmount(asset,Number(amount)),reason,refId,type,createdAt:new Date().toISOString(),immutable:true};
   db.wallet_ledger.push(entry);
   return entry;
+}
+function repairBnbConversionPrecision(db){
+  ensureSupply(db);
+  let corrected=0;
+  const repaired=[];
+  for(const conversion of db.conversions||[]){
+    const toAsset=String(conversion.toAsset||'').toUpperCase();
+    const fromAsset=String(conversion.fromAsset||'USDT').toUpperCase();
+    const current=Number(conversion.toAmount??conversion.bnbAmount??0);
+    const paid=Number(conversion.fromAmount??conversion.usdtAmount??0);
+    const price=Number(conversion.price??conversion.buyPrice??conversion.rate??0);
+    if(fromAsset!=='USDT'||toAsset!=='BNB'||current!==0||!(paid>0)||!(price>0)||conversion.status==='failed')continue;
+    const expected=roundAssetAmount('BNB',paid/price*(1-(Number(conversion.feePercent)||0)/100));
+    if(!(expected>0))continue;
+    conversion.toAmount=expected;
+    conversion.bnbAmount=expected;
+    const refs=new Set([conversion.orderId,conversion.id].filter(Boolean));
+    const order=(db.exchange_orders||[]).find(item=>item.id===conversion.orderId||item.conversionId===conversion.id||item.id===conversion.id);
+    if(order){
+      refs.add(order.id);
+      order.toAmount=expected;
+      order.bnbAmount=expected;
+    }
+    for(const entry of db.wallet_ledger||[])if(refs.has(entry.refId)&&String(entry.asset||'').toUpperCase()==='BNB'&&Number(entry.amount||0)===0)entry.amount=expected;
+    const reserveEntries=(db.reserve_ledger||[]).filter(entry=>refs.has(entry.refId)&&String(entry.asset||'').toUpperCase()==='BNB'&&entry.walletType==='exchange'&&Number(entry.amount||0)===0);
+    for(const entry of reserveEntries){
+      const wallet=reserveWallet(db,'BNB','exchange');
+      wallet.balance=roundAssetAmount('BNB',Number(wallet.balance||0)-expected);
+      if(wallet.balance<0)wallet.balance=0;
+      wallet.updatedAt=new Date().toISOString();
+      entry.amount=expected;
+      entry.balanceAfter=wallet.balance;
+    }
+    corrected++;
+    repaired.push({conversionId:conversion.id,orderId:conversion.orderId||order?.id||null,fromAmount:paid,price,bnbAmount:expected});
+  }
+  return {corrected,repaired};
 }
 function circulatingHb9(db){
   return roundCurrency((db.users||[]).filter(u=>u.role==='user').reduce((sum,u)=>sum+walletBalances(db,u.id).hb9+(db.stakes||[]).filter(s=>s.userId===u.id&&s.status==='active').reduce((n,s)=>n+(Number(s.coinAmount)||0),0),0));
 }
-function reserveTotal(db,asset){ensureSupply(db);return roundCurrency(db.reserve_wallets.filter(x=>x.asset===asset).reduce((n,x)=>n+(Number(x.balance)||0),0));}
+function reserveTotal(db,asset){ensureSupply(db);return roundAssetAmount(asset,db.reserve_wallets.filter(x=>x.asset===asset).reduce((n,x)=>n+(Number(x.balance)||0),0));}
 function burnTotal(db){ensureSupply(db);return roundCurrency(db.burn_ledger.reduce((n,x)=>n+(Number(x.amount)||0),0));}
 function exchangeReserveReport(db){
   ensureSupply(db);
@@ -226,10 +266,10 @@ function exchangeReserveReport(db){
   const hb9Bought=buyConversions.filter(x=>(x.toAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.toAmount)||0),0);
   const hb9Returned=sellConversions.filter(x=>(x.fromAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.fromAmount)||0),0);
   const hb9Sold=roundCurrency(Math.max(0,hb9Bought-hb9Returned));
-  const bnbSold=roundCurrency(buyConversions.filter(x=>x.toAsset==='BNB').reduce((n,x)=>n+(Number(x.bnbAmount)||Number(x.toAmount)||0),0));
+  const bnbSold=roundAssetAmount('BNB',buyConversions.filter(x=>x.toAsset==='BNB').reduce((n,x)=>n+(Number(x.bnbAmount)||Number(x.toAmount)||0),0));
   const bnbWallet=reserveWallet(db,'BNB','exchange');
-  const bnbRemaining=roundCurrency(Number(bnbWallet?.balance)||0);
-  const bnbConfiguredTotal=BNB_EXCHANGE_RESERVE_TOTAL!==null&&BNB_EXCHANGE_RESERVE_TOTAL>0?BNB_EXCHANGE_RESERVE_TOTAL:(bnbRemaining>0||bnbSold>0?roundCurrency(bnbRemaining+bnbSold):0);
+  const bnbRemaining=roundAssetAmount('BNB',Number(bnbWallet?.balance)||0);
+  const bnbConfiguredTotal=BNB_EXCHANGE_RESERVE_TOTAL!==null&&BNB_EXCHANGE_RESERVE_TOTAL>0?BNB_EXCHANGE_RESERVE_TOTAL:(bnbRemaining>0||bnbSold>0?roundAssetAmount('BNB',bnbRemaining+bnbSold):0);
   return {
     hb9:{asset:'HB9',total:roundCurrency(HB9_EXCHANGE_RESERVE_TOTAL),sold:hb9Sold,remaining:roundCurrency(Math.max(0,HB9_EXCHANGE_RESERVE_TOTAL-hb9Sold)),configured:true},
     bnb:{asset:'BNB',total:roundCurrency(bnbConfiguredTotal),sold:bnbSold,remaining:bnbRemaining,configured:bnbConfiguredTotal>0||bnbRemaining>0}
@@ -443,13 +483,13 @@ function walletBalances(db,userId) {
   const salaryHb9=(db.salary_payouts||[]).filter(x=>x.userId===userId&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0);
   const bnbLedger=(db.wallet_ledger||[]).filter(x=>x.userId===userId&&String(x.asset||'').toUpperCase()==='BNB');
   const bnbFromLedger=bnbLedger.reduce((n,x)=>n+(['credit','unlock'].includes(x.direction)?1:-1)*(Number(x.amount)||0),0);
-  return {usdt:roundCurrency(deposits+adminUsdt-convertedUsdt+receivedUsdt-withdrawals),withdrawableUsdt:roundCurrency(receivedUsdt+adminUsdt-withdrawals),hb9:roundCurrency(receivedHb9+adminHb9+b1Hb9+referralHb9+levelHb9+salaryHb9-soldHb9-stakedHb9-sentHb9+receivedTransferHb9),bnb:roundCurrency(bnbLedger.length?bnbFromLedger:receivedBnb+adminBnb-stakedBnb),totalDeposit:roundCurrency(deposits)};
+  return {usdt:roundCurrency(deposits+adminUsdt-convertedUsdt+receivedUsdt-withdrawals),withdrawableUsdt:roundCurrency(receivedUsdt+adminUsdt-withdrawals),hb9:roundCurrency(receivedHb9+adminHb9+b1Hb9+referralHb9+levelHb9+salaryHb9-soldHb9-stakedHb9-sentHb9+receivedTransferHb9),bnb:roundAssetAmount('BNB',bnbLedger.length?bnbFromLedger:receivedBnb+adminBnb-stakedBnb),totalDeposit:roundCurrency(deposits)};
 }
 function bnbLedgerDiagnostic(db,userId){
   const entries=(db.wallet_ledger||[]).filter(x=>x.userId===userId&&String(x.asset||'').toUpperCase()==='BNB');
-  const credits=roundCurrency(entries.filter(x=>x.direction==='credit'||x.direction==='unlock').reduce((n,x)=>n+(Number(x.amount)||0),0));
-  const debits=roundCurrency(entries.filter(x=>!['credit','unlock'].includes(x.direction)).reduce((n,x)=>n+(Number(x.amount)||0),0));
-  return {userId,asset:'BNB',credits,debits,computedBalance:roundCurrency(credits-debits),dashboardBalance:walletBalances(db,userId).bnb,entries};
+  const credits=roundAssetAmount('BNB',entries.filter(x=>x.direction==='credit'||x.direction==='unlock').reduce((n,x)=>n+(Number(x.amount)||0),0));
+  const debits=roundAssetAmount('BNB',entries.filter(x=>!['credit','unlock'].includes(x.direction)).reduce((n,x)=>n+(Number(x.amount)||0),0));
+  return {userId,asset:'BNB',credits,debits,computedBalance:roundAssetAmount('BNB',credits-debits),dashboardBalance:walletBalances(db,userId).bnb,entries};
 }
 function flushTotal(db,userId) { return db.flushRecords.filter(x=>x.userId===userId).reduce((n,x)=>n+x.flushedIncome,0); }
 function deterministicInt(seed, min, max) {
@@ -830,7 +870,7 @@ async function assetBuyPrice(db,asset){
 }
 async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9',clientRequestId=null}={}){
   if(!db.settings.exchangeEnabled)throw Error('Exchange is disabled');
-  const normalizedFrom=String(fromAsset||'USDT').toUpperCase(), value=roundCurrency(Number(amount)), normalized=String(toAsset||'HB9').toUpperCase();
+  const normalizedFrom=String(fromAsset||'USDT').toUpperCase(), normalized=String(toAsset||'HB9').toUpperCase(), value=roundAssetAmount(normalizedFrom,Number(amount));
   if(!((normalizedFrom==='USDT'&&['HB9','BNB'].includes(normalized))||(normalizedFrom==='HB9'&&normalized==='USDT')))throw Error('Conversion pair must be USDT/HB9, HB9/USDT, or USDT/BNB');
   if(!Number.isFinite(value)||value<=0)throw Error('Conversion amount is invalid');
   if(clientRequestId&&db.exchange_orders?.some(x=>x.userId===user.id&&x.clientRequestId===clientRequestId)){const order=db.exchange_orders.find(x=>x.userId===user.id&&x.clientRequestId===clientRequestId);return {duplicate:true,order,conversion:(db.conversions||[]).find(x=>x.id===order.conversionId||x.orderId===order.id||x.id===order.id),balance:walletBalances(db,user.id)};}
@@ -841,7 +881,7 @@ async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9'
   if(!Number.isFinite(price)||price<=0)throw Error(`${priceAsset} price is unavailable`);
   const fee=normalizedFrom==='USDT'&&normalized==='HB9'?setting(db,'tradingFeePercent')+setting(db,'buyFeePercent'):0;
   const sellFee=normalizedFrom==='HB9'&&normalized==='USDT'?setting(db,'tradingFeePercent')+setting(db,'sellFeePercent'):0;
-  const toAmount=normalizedFrom==='HB9'?roundCurrency(value*price*(1-sellFee/100)):roundCurrency(value/price*(1-fee/100));
+  const toAmount=normalizedFrom==='HB9'?roundAssetAmount(normalized,value*price*(1-sellFee/100)):roundAssetAmount(normalized,value/price*(1-fee/100));
   const reserveReport=exchangeReserveReport(db);
   if(normalizedFrom==='USDT'&&normalized==='HB9'&&toAmount>reserveReport.hb9.remaining)throw Error('HB9 reserve is insufficient');
   if(normalized==='BNB'&&!reserveReport.bnb.configured)throw Error('BNB reserve not configured');
@@ -863,7 +903,7 @@ async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9'
   return {duplicate:false,order,conversion,balance:walletBalances(db,user.id)};
 }
 async function createStake(db,user,{amount,stakeAsset='HB9',clientRequestId=null}={}){
-  const normalized=String(stakeAsset||'HB9').toUpperCase(), stakeAmount=roundCurrency(Number(amount)), balances=walletBalances(db,user.id);
+  const normalized=String(stakeAsset||'HB9').toUpperCase(), stakeAmount=roundAssetAmount(normalized,Number(amount)), balances=walletBalances(db,user.id);
   if(!['HB9','BNB'].includes(normalized))throw Error('Stake asset must be HB9 or BNB');
   if(clientRequestId){const existing=(db.stakes||[]).find(x=>x.userId===user.id&&x.clientRequestId===String(clientRequestId));if(existing)return existing;}
   if(!Number.isFinite(stakeAmount)||stakeAmount<=0)throw Error(`${normalized} stake amount is invalid`);
@@ -1367,4 +1407,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log('DAILY_SCHEDULER_UTC',{globalTeam:'17:30',roi:'18:00'});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};

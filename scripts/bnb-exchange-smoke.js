@@ -8,6 +8,7 @@ const {
   convertUsdtToAsset,
   createStake,
   dashboard,
+  repairBnbConversionPrecision,
   walletBalances
 } = require('../server');
 
@@ -117,14 +118,22 @@ function dbFixture() {
   assert.strictEqual(hb9SellRetry.order.id, hb9Sell.order.id);
   assert.strictEqual(db.wallet_ledger.length, beforeSellRetryLedger);
 
+  const tinyBnbBuy = await convertUsdtToAsset(db, user, { amount: 0.5, toAsset: 'BNB', clientRequestId: 'bnb-buy-small' });
+  assert.strictEqual(tinyBnbBuy.order.toAsset, 'BNB');
+  assert.strictEqual(tinyBnbBuy.order.toAmount, 0.00083333);
+  assert.strictEqual(tinyBnbBuy.order.bnbAmount, 0.00083333);
+  assert.strictEqual(tinyBnbBuy.balance.usdt, 919.5);
+  assert.strictEqual(tinyBnbBuy.balance.bnb, 0.00083333);
+  assert(db.wallet_ledger.some(x => x.refId === tinyBnbBuy.order.id && x.asset === 'BNB' && x.direction === 'credit' && x.amount === 0.00083333));
+
   const bnbBuy = await convertUsdtToAsset(db, user, { amount: 600, toAsset: 'BNB' });
   assert.strictEqual(bnbBuy.order.toAsset, 'BNB');
   assert.strictEqual(bnbBuy.order.toAmount, 1);
   assert.strictEqual(bnbBuy.conversion.toAsset, 'BNB');
-  assert.strictEqual(bnbBuy.balance.usdt, 320);
-  assert.strictEqual(walletBalances(db, user.id).bnb, 1);
-  assert.strictEqual(dashboard(db, user).wallets.bnb, 1);
-  assert.strictEqual(dashboard(db, user).conversions.length, 3);
+  assert.strictEqual(bnbBuy.balance.usdt, 319.5);
+  assert.strictEqual(walletBalances(db, user.id).bnb, 1.00083333);
+  assert.strictEqual(dashboard(db, user).wallets.bnb, 1.00083333);
+  assert.strictEqual(dashboard(db, user).conversions.length, 4);
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'USDT' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'BNB' && x.direction === 'credit'));
 
@@ -143,7 +152,7 @@ function dbFixture() {
   assert.strictEqual(bnbStake.bnbPriceAtStake, 600);
   assert.strictEqual(bnbStake.stakeUsdValue, 300);
   assert.strictEqual(bnbStake.hb9EquivalentAmount, 1500);
-  assert.strictEqual(walletBalances(db, user.id).bnb, 0.5);
+  assert.strictEqual(walletBalances(db, user.id).bnb, 0.50083333);
   const beforeStakeRetryLedger = db.wallet_ledger.length;
   const bnbStakeRetry = await createStake(db, user, { amount: 0.5, stakeAsset: 'BNB', clientRequestId: 'bnb-stake-1' });
   assert.strictEqual(bnbStakeRetry.id, bnbStake.id);
@@ -164,16 +173,28 @@ function dbFixture() {
     /Admin only/
   );
   await adminFundTransfer(db, admin, { userId: user.id, asset: 'BNB', action: 'credit', amount: 0.25, reason: 'admin bnb smoke' });
-  assert.strictEqual(walletBalances(db, user.id).bnb, 0.75);
+  assert.strictEqual(walletBalances(db, user.id).bnb, 0.75083333);
   const originalConversions = db.conversions;
   db.conversions = db.conversions.filter(item => item.toAsset !== 'BNB');
-  assert.strictEqual(walletBalances(db, user.id).bnb, 0.75, 'BNB balance must still compute from BNB wallet ledger credits/debits if conversion rows are unavailable');
+  assert.strictEqual(walletBalances(db, user.id).bnb, 0.75083333, 'BNB balance must still compute from BNB wallet ledger credits/debits if conversion rows are unavailable');
   const diagnostic = bnbLedgerDiagnostic(db, user.id);
-  assert.strictEqual(diagnostic.credits, 1.25);
+  assert.strictEqual(diagnostic.credits, 1.25083333);
   assert.strictEqual(diagnostic.debits, 0.5);
-  assert.strictEqual(diagnostic.computedBalance, 0.75);
-  assert.strictEqual(diagnostic.dashboardBalance, 0.75);
+  assert.strictEqual(diagnostic.computedBalance, 0.75083333);
+  assert.strictEqual(diagnostic.dashboardBalance, 0.75083333);
   db.conversions = originalConversions;
+
+  const bad = dbFixture();
+  bad.conversions.push({ id: 'cnv_bad_bnb', orderId: 'xord_bad_bnb', userId: bad.users[0].id, direction: 'buy', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, usdtAmount: 0.5, toAmount: 0, bnbAmount: 0, price: 600, status: 'completed' });
+  bad.exchange_orders.push({ id: 'xord_bad_bnb', conversionId: 'cnv_bad_bnb', userId: bad.users[0].id, direction: 'buy', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, usdtAmount: 0.5, toAmount: 0, bnbAmount: 0, price: 600, status: 'completed' });
+  bad.wallet_ledger.push({ id: 'wlt_bad_bnb', userId: bad.users[0].id, asset: 'BNB', direction: 'credit', amount: 0, refId: 'xord_bad_bnb' });
+  bad.reserve_ledger.push({ id: 'rsv_bad_bnb', asset: 'BNB', walletType: 'exchange', direction: 'debit', amount: 0, refId: 'xord_bad_bnb', balanceAfter: 1000 });
+  const repair = repairBnbConversionPrecision(bad);
+  assert.strictEqual(repair.corrected, 1);
+  assert.strictEqual(bad.conversions[0].toAmount, 0.00083333);
+  assert.strictEqual(bad.exchange_orders[0].bnbAmount, 0.00083333);
+  assert.strictEqual(bad.wallet_ledger.find(item => item.id === 'wlt_bad_bnb').amount, 0.00083333);
+  assert.strictEqual(bad.reserve_ledger.find(item => item.id === 'rsv_bad_bnb').amount, 0.00083333);
 
   console.log('bnb-exchange-smoke ok');
 })().catch(error => {

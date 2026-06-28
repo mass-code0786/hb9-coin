@@ -106,10 +106,10 @@ function createContext(options = {}) {
   const context = {
     pages: {},
     data: {
-      wallets: { usdt: 1000, hb9: 50, bnb: 2 },
+      wallets: { usdt: 1000, hb9: 50, bnb: 0.00083333 },
       settings: { hb9Price: 0.2, market: { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
       conversions: [
-        { id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, toAmount: 0.000897123, price: 557.33, status: 'completed', createdAt: '2026-06-28T10:00:00.000Z' },
+        { id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, toAmount: 0.0008971184, price: 557.33, status: 'completed', createdAt: '2026-06-28T10:00:00.000Z' },
         { id: 'cnv_hb9_ui', fromAsset: 'USDT', toAsset: 'HB9', fromAmount: 1, toAmount: 0.444444, price: 2.25, status: 'completed', createdAt: '2026-06-28T10:01:00.000Z' }
       ],
       stakes: []
@@ -198,7 +198,8 @@ async function tick() {
   assert(context.page.innerHTML.includes('conversion-history-table'), 'desktop conversion history table still renders');
   assert(context.page.innerHTML.includes('<th>Status</th>'), 'conversion history exposes status column');
   assert(historyHtml.includes('0.50 USDT'), 'BNB history formats USDT with 2 decimals');
-  assert(historyHtml.includes('0.00089712 BNB'), 'BNB history formats received amount compactly');
+  assert(historyHtml.includes('0.00089711 BNB'), 'BNB history formats received amount compactly without rounding to zero');
+  assert(context.page.innerHTML.includes('0.00083333 BNB'), 'BNB wallet card shows decimal BNB balance');
   assert(historyHtml.includes('Completed'), 'BNB history normalizes completed status');
   assert(!/bnb-token-badge|hb9-coin-logo|<img|<svg/.test(historyHtml), 'conversion history rows do not render token logos');
   assert(context.page.innerHTML.includes('/assets/bnb-logo.svg'), 'BNB logo image renders from local asset');

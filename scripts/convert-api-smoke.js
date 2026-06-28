@@ -87,6 +87,18 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   assert.strictEqual(hb9SellRetry.order.id, hb9Sell.order.id);
   assert.strictEqual(readDB().wallet_ledger.length, beforeSellRetry, 'HB9 -> USDT idempotency prevents duplicate ledger entries');
 
+  const tinyBnb = await request(base, '/api/convert', {
+    method: 'POST',
+    token,
+    body: { fromAsset: 'USDT', toAsset: 'BNB', amount: 0.5, clientRequestId: 'api-bnb-tiny-convert' }
+  });
+  assert.strictEqual(tinyBnb.order.toAsset, 'BNB');
+  assert.strictEqual(tinyBnb.order.toAmount, 0.00083333);
+  assert.strictEqual(tinyBnb.order.bnbAmount, 0.00083333);
+  assert.strictEqual(tinyBnb.balance.usdt, 919.5);
+  assert.strictEqual(tinyBnb.balance.bnb, 0.00083333);
+  assert(readDB().wallet_ledger.some(item => item.refId === tinyBnb.order.id && item.asset === 'BNB' && item.amount === 0.00083333), 'BNB ledger credit uses decimal amount');
+
   const bnb = await request(base, '/api/convert', {
     method: 'POST',
     token,
@@ -94,23 +106,24 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   });
   assert.strictEqual(bnb.order.toAsset, 'BNB');
   assert.strictEqual(bnb.conversion.toAsset, 'BNB');
-  assert.strictEqual(bnb.balance.usdt, 320);
-  assert.strictEqual(bnb.balance.bnb, 1);
+  assert.strictEqual(bnb.balance.usdt, 319.5);
+  assert.strictEqual(bnb.balance.bnb, 1.00083333);
 
   const dashboard = await request(base, '/api/dashboard', { token });
-  assert.strictEqual(dashboard.wallets.usdt, 320);
+  assert.strictEqual(dashboard.wallets.usdt, 319.5);
   assert.strictEqual(dashboard.wallets.hb9, 400);
-  assert.strictEqual(dashboard.wallets.bnb, 1);
-  assert.strictEqual(dashboard.conversions.length, 3);
+  assert.strictEqual(dashboard.wallets.bnb, 1.00083333);
+  assert.strictEqual(dashboard.conversions.length, 4);
   assert(dashboard.conversions.some(item => item.toAsset === 'BNB' && item.toAmount === 1), 'Conversion history exposes BNB toAmount');
+  assert(dashboard.conversions.some(item => item.toAsset === 'BNB' && item.toAmount === 0.00083333), 'Conversion history exposes tiny BNB decimal received amount');
   assert(dashboard.conversions.some(item => item.fromAsset === 'HB9' && item.toAsset === 'USDT' && item.fromAmount === 100 && item.toAmount === 20), 'Conversion history exposes HB9 -> USDT direction');
 
   const diagnostic = await request(base, `/api/admin/diagnostics/bnb-wallet?userId=${user.id}`, { token });
   assert.strictEqual(diagnostic.asset, 'BNB');
-  assert.strictEqual(diagnostic.credits, 1);
+  assert.strictEqual(diagnostic.credits, 1.00083333);
   assert.strictEqual(diagnostic.debits, 0);
-  assert.strictEqual(diagnostic.computedBalance, 1);
-  assert.strictEqual(diagnostic.dashboardBalance, 1);
+  assert.strictEqual(diagnostic.computedBalance, 1.00083333);
+  assert.strictEqual(diagnostic.dashboardBalance, 1.00083333);
 
   await assert.rejects(
     () => request(base, '/api/convert', {
