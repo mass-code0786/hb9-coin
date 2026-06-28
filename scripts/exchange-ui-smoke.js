@@ -103,7 +103,10 @@ function createContext(options = {}) {
     data: {
       wallets: { usdt: 1000, hb9: 50, bnb: 2 },
       settings: { hb9Price: 0.2, market: { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
-      conversions: [{ id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 600, toAmount: 1, price: 600, createdAt: new Date().toISOString() }],
+      conversions: [
+        { id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, toAmount: 0.000897123, price: 557.33, status: 'completed', createdAt: '2026-06-28T10:00:00.000Z' },
+        { id: 'cnv_hb9_ui', fromAsset: 'USDT', toAsset: 'HB9', fromAmount: 1, toAmount: 0.444444, price: 2.25, status: 'completed', createdAt: '2026-06-28T10:01:00.000Z' }
+      ],
       stakes: []
     },
     page,
@@ -180,12 +183,18 @@ async function tick() {
 
   context.pages['HB9 Exchange']();
   await tick();
+  let historyHtml = context.page.innerHTML.match(/<section class="card exchange-history-card"[\s\S]*?<\/section><\/section>$/)?.[0] || '';
   assert(context.page.innerHTML.includes('BNB Exchange'), 'BNB selected title renders');
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected pair state renders');
   assert(context.page.innerHTML.includes('BNB Price'), 'BNB selected price card renders');
-  assert(context.page.innerHTML.includes('exchange-history-scroll conversion-history-scroll'), 'conversion history uses direct mobile horizontal scroll wrapper');
-  assert(context.page.innerHTML.includes('conversion-history-table'), 'conversion history table has production scroll table class');
+  assert(context.page.innerHTML.includes('conversion-history-list'), 'conversion history renders compact mobile list');
+  assert(context.page.innerHTML.includes('conversion-history-card'), 'conversion history renders compact mobile cards');
+  assert(context.page.innerHTML.includes('conversion-history-table'), 'desktop conversion history table still renders');
   assert(context.page.innerHTML.includes('<th>Status</th>'), 'conversion history exposes status column');
+  assert(historyHtml.includes('0.50 USDT'), 'BNB history formats USDT with 2 decimals');
+  assert(historyHtml.includes('0.00089712 BNB'), 'BNB history formats received amount compactly');
+  assert(historyHtml.includes('Completed'), 'BNB history normalizes completed status');
+  assert(!/bnb-token-badge|hb9-coin-logo|<img|<svg/.test(historyHtml), 'conversion history rows do not render token logos');
   assert(context.page.innerHTML.includes('/assets/bnb-logo.svg'), 'BNB logo image renders from local asset');
   assert(context.page.innerHTML.includes('bnb-token-fallback'), 'BNB logo keeps fallback if image fails');
   assert(context.page.innerHTML.includes('onerror='), 'BNB logo image has no broken-image state');
@@ -203,10 +212,14 @@ async function tick() {
 
   context.page.elements.assetButtons[0].onclick();
   await tick();
+  historyHtml = context.page.innerHTML.match(/<section class="card exchange-history-card"[\s\S]*?<\/section><\/section>$/)?.[0] || '';
   assert(context.page.innerHTML.includes('HB9 Exchange'), 'HB9 selected title renders after switch');
   assert(context.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 selected pair state renders');
   assert(context.page.innerHTML.includes('HB9 Price'), 'HB9 selected price card renders');
   assert(context.page.innerHTML.includes('hb9-coin-logo'), 'HB9 logo still renders');
+  assert(historyHtml.includes('1.00 USDT'), 'HB9 history formats USDT with 2 decimals');
+  assert(historyHtml.includes('0.4444 HB9'), 'HB9 history formats received amount compactly');
+  assert(!/bnb-token-badge|hb9-coin-logo|<img|<svg/.test(historyHtml), 'HB9 conversion history rows do not render token logos');
   assert(!context.page.innerHTML.includes('BNB Wallet'), 'HB9 mode does not render BNB wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:ICPUSDT', 'HB9 chart widget uses existing ICP proxy');
   assert(context.page.elements.chart.hasIframe, 'HB9 chart is not blank after switch');
@@ -253,11 +266,11 @@ async function tick() {
   assert(delayedBnb.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 pair remains selected after old BNB response');
 
   const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'exchange-fixes.css'), 'utf8');
-  assert(/\.exchange-history-scroll[\s\S]*overflow-x:\s*auto/.test(css), 'conversion history allows horizontal overflow');
-  assert(/-webkit-overflow-scrolling:\s*touch/.test(css), 'conversion history uses touch momentum scrolling');
-  assert(/\.conversion-history-scroll[\s\S]*touch-action:\s*pan-x/.test(css), 'conversion history touch area owns pan-x gestures');
-  assert(/\.conversion-history-table[\s\S]*min-width:\s*900px/.test(css), 'conversion history table has production mobile min-width');
-  assert(/\.exchange-history-card[\s\S]*overflow:\s*visible\s*!important/.test(css), 'conversion history card does not clip horizontal scroll');
+  assert(/\.exchange-history-scroll[\s\S]*overflow-x:\s*auto/.test(css), 'desktop conversion history table remains readable with overflow support');
+  assert(/@media\s*\(max-width:\s*768px\)[\s\S]*\.conversion-history-tablewrap[\s\S]*display:\s*none\s*!important/.test(css), 'mobile hides wide conversion history table');
+  assert(/@media\s*\(max-width:\s*768px\)[\s\S]*\.conversion-history-scroll[\s\S]*overflow-x:\s*visible\s*!important/.test(css), 'mobile conversion history does not require horizontal scroll');
+  assert(/@media\s*\(max-width:\s*768px\)[\s\S]*\.conversion-history-list[\s\S]*display:\s*grid/.test(css), 'mobile conversion history uses compact cards');
+  assert(/\.conversion-history-card b[\s\S]*overflow-wrap:\s*anywhere/.test(css), 'mobile conversion history text cannot overflow');
   assert(fs.existsSync(path.join(__dirname, '..', 'public', 'assets', 'bnb-logo.svg')), 'local BNB logo asset exists');
 
   console.log('exchange-ui-smoke ok');
