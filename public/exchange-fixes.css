@@ -34,6 +34,164 @@
   border: 1px solid rgba(0, 0, 0, .12);
 }
 
+.binance-swap-card {
+  overflow: visible;
+}
+
+.swap-card-form {
+  display: grid;
+  gap: 12px;
+}
+
+.swap-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(151, 165, 211, .16);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(124, 58, 237, .14), rgba(5, 8, 17, .34));
+}
+
+.swap-panel-head,
+.swap-panel-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.swap-panel-head span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.swap-panel-head b {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.swap-asset-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 112px;
+  max-width: 42%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid rgba(168, 85, 247, .28);
+  border-radius: 999px;
+  background: rgba(17, 24, 39, .72);
+  color: var(--text);
+  font-weight: 900;
+}
+
+.swap-asset-pill:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.swap-asset-pill .swap-token-badge,
+.swap-asset-pill .usdt-coin-logo,
+.swap-asset-pill .hb9-coin-logo,
+.swap-asset-pill .bnb-token-badge {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+}
+
+.swap-asset-pill span:not(.swap-pill-arrow) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.swap-pill-arrow {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.swap-amount-wrap,
+.swap-output-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.swap-amount-wrap input,
+.swap-output-wrap input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 24px;
+  font-weight: 900;
+  text-align: right;
+  outline: 0;
+}
+
+.swap-output-wrap input {
+  color: rgba(243, 244, 246, .92);
+}
+
+.swap-max {
+  flex: 0 0 auto;
+  min-width: 48px;
+  height: 32px;
+  border: 1px solid rgba(168, 85, 247, .4);
+  border-radius: 999px;
+  background: rgba(168, 85, 247, .14);
+  color: #d8b4fe;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.swap-direction-button {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 148px;
+  min-height: 42px;
+  margin: -2px 0;
+  padding: 8px 14px;
+  border: 1px solid rgba(168, 85, 247, .36);
+  border-radius: 999px;
+  background: linear-gradient(135deg, #7c3aed, #a855f7);
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(124, 58, 237, .28);
+  font-weight: 900;
+}
+
+.swap-direction-button strong {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.swap-direction-button:disabled {
+  background: rgba(31, 41, 55, .82);
+  box-shadow: none;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.binance-swap-card .swap-submit {
+  width: 100%;
+  min-height: 46px;
+  border-radius: 12px;
+  font-weight: 900;
+}
+
 .exchange-history-card {
   overflow: visible !important;
 }
@@ -101,6 +259,38 @@
 }
 
 @media (max-width: 768px) {
+  .swap-panel {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .swap-panel-head {
+    align-items: flex-start;
+  }
+
+  .swap-panel-body {
+    gap: 10px;
+  }
+
+  .swap-asset-pill {
+    min-width: 94px;
+    max-width: 40%;
+    height: 40px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .swap-amount-wrap input,
+  .swap-output-wrap input {
+    font-size: 20px;
+  }
+
+  .swap-direction-button {
+    min-width: 132px;
+    min-height: 40px;
+    font-size: 13px;
+  }
+
   .exchange-history-card {
     overflow: visible !important;
   }

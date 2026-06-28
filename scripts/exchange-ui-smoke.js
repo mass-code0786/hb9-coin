@@ -66,6 +66,7 @@ function createPage() {
         new FakeElement({ tvInterval: 'D' })
       ];
       this.elements.swapToggle = new FakeElement();
+      this.elements.maxButton = new FakeElement();
     },
     get innerHTML() {
       return this.html;
@@ -79,6 +80,7 @@ function createPage() {
       if (selector === '[data-market-pair]') return this.elements.marketPair;
       if (selector === '[data-price-label]') return this.elements.priceLabel;
       if (selector === '[data-swap-toggle]') return this.elements.swapToggle;
+      if (selector === '[data-max-swap]') return this.elements.maxButton;
       if (selector.startsWith('[data-selected-asset=')) {
         const asset = /data-selected-asset="([^"]+)"/.exec(selector)?.[1];
         const pair = /data-selected-pair="([^"]+)"/.exec(selector)?.[1];
@@ -193,6 +195,12 @@ async function tick() {
   assert(context.page.innerHTML.includes('BNB Exchange'), 'BNB selected title renders');
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected pair state renders');
   assert(context.page.innerHTML.includes('BNB Price'), 'BNB selected price card renders');
+  assert(context.page.innerHTML.includes('binance-swap-card'), 'swap card layout renders');
+  assert(context.page.innerHTML.includes('<span>From</span>'), 'swap card renders From section');
+  assert(context.page.innerHTML.includes('<span>To</span>'), 'swap card renders To section');
+  assert(context.page.innerHTML.includes('USDT Wallet: $1000.00'), 'swap card shows source wallet balance');
+  assert(context.page.innerHTML.includes('data-max-swap'), 'swap card renders Max button');
+  assert(context.page.innerHTML.includes('BNB conversion is USDT only'), 'BNB reverse direction is disabled with message');
   assert(context.page.innerHTML.includes('conversion-history-list'), 'conversion history renders compact mobile list');
   assert(context.page.innerHTML.includes('conversion-history-card'), 'conversion history renders compact mobile cards');
   assert(context.page.innerHTML.includes('conversion-history-table'), 'desktop conversion history table still renders');
@@ -208,6 +216,9 @@ async function tick() {
   assert(!context.page.innerHTML.includes('HB9 Wallet'), 'BNB mode does not render HB9 wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'BNB chart widget uses BNBUSDT');
   assert(context.page.elements.chart.hasIframe, 'BNB chart is not blank');
+  context.page.elements.maxButton.onclick();
+  assert.strictEqual(context.page.elements.form.elements.swapAmount.value, '1000.00', 'Max fills source USDT wallet balance');
+  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '1.66666666 BNB', 'Max recalculates small-precision BNB receive amount');
   context.page.elements.form.elements.swapAmount.value = '25';
   await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
   const bnbPayload = JSON.parse(context.__apiCalls.filter(call => call.endpoint === '/api/convert').at(-1).options.body);
@@ -224,10 +235,11 @@ async function tick() {
   assert(context.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 selected pair state renders');
   assert(context.page.innerHTML.includes('data-swap-direction="USDT_HB9"'), 'HB9 default swap direction is USDT to HB9');
   assert(context.page.innerHTML.includes('HB9 Price'), 'HB9 selected price card renders');
-  assert(context.page.innerHTML.includes('USDT Amount'), 'HB9 default from label is USDT Amount');
-  assert(context.page.innerHTML.includes('HB9 You Receive'), 'HB9 default receive label is HB9');
-  assert(context.page.innerHTML.includes('USDT ↓ HB9'), 'HB9 default swap toggle shows direction');
-  assert(context.page.innerHTML.includes('Convert to HB9'), 'HB9 default button converts to HB9');
+  assert(context.page.innerHTML.includes('USDT Wallet: $900.00'), 'HB9 default source wallet is USDT');
+  assert(context.page.innerHTML.includes('aria-label="USDT amount"'), 'HB9 default amount input is USDT');
+  assert(context.page.innerHTML.includes('aria-label="HB9 estimated receive"'), 'HB9 default receive field is HB9');
+  assert(context.page.innerHTML.includes('<span>USDT</span><strong aria-hidden="true">⇅</strong><span>HB9</span>'), 'HB9 default swap toggle shows direction');
+  assert(context.page.innerHTML.includes('<button class="primary swap-submit">Convert</button>'), 'HB9 default submit button renders');
   assert(context.page.innerHTML.includes('hb9-coin-logo'), 'HB9 logo still renders');
   assert(historyHtml.includes('1.00 USDT'), 'HB9 history formats USDT with 2 decimals');
   assert(historyHtml.includes('0.4444 HB9'), 'HB9 history formats received amount compactly');
@@ -247,11 +259,11 @@ async function tick() {
   context.page.elements.swapToggle.onclick();
   await tick();
   assert(context.page.innerHTML.includes('data-swap-direction="HB9_USDT"'), 'HB9 swap toggle reverses direction');
-  assert(context.page.innerHTML.includes('HB9 Wallet'), 'reversed swap shows HB9 wallet as source');
-  assert(context.page.innerHTML.includes('HB9 Amount'), 'reversed swap from label is HB9 Amount');
-  assert(context.page.innerHTML.includes('USDT You Receive'), 'reversed swap receive label is USDT');
-  assert(context.page.innerHTML.includes('HB9 ↓ USDT'), 'reversed swap toggle shows direction');
-  assert(context.page.innerHTML.includes('Convert to USDT'), 'reversed swap button converts to USDT');
+  assert(context.page.innerHTML.includes('HB9 Wallet: 500 HB9'), 'reversed swap shows HB9 wallet as source');
+  assert(context.page.innerHTML.includes('aria-label="HB9 amount"'), 'reversed swap from input is HB9');
+  assert(context.page.innerHTML.includes('aria-label="USDT estimated receive"'), 'reversed swap receive field is USDT');
+  assert(context.page.innerHTML.includes('<span>HB9</span><strong aria-hidden="true">⇅</strong><span>USDT</span>'), 'reversed swap toggle shows direction');
+  assert(context.page.innerHTML.includes('<button class="primary swap-submit">Convert</button>'), 'reversed swap submit button renders');
   context.page.elements.form.elements.swapAmount.value = '5';
   context.page.elements.form.elements.swapAmount.oninput();
   assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '1.00 USDT', 'reversed swap receive amount follows backend-priced market quote');
@@ -266,13 +278,13 @@ async function tick() {
   context.page.elements.swapToggle.onclick();
   await tick();
   assert(context.page.innerHTML.includes('data-swap-direction="USDT_HB9"'), 'HB9 swap toggle switches back to USDT to HB9');
-  assert(context.page.innerHTML.includes('USDT Amount'), 'switching back restores USDT Amount label');
-  assert(context.page.innerHTML.includes('Convert to HB9'), 'switching back restores Convert to HB9 button');
+  assert(context.page.innerHTML.includes('aria-label="USDT amount"'), 'switching back restores USDT amount input');
+  assert(context.page.innerHTML.includes('aria-label="HB9 estimated receive"'), 'switching back restores HB9 receive field');
 
   context.page.elements.assetButtons[1].onclick();
   await tick();
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'switching back updates pair to BNBUSDT');
-  assert(!context.page.innerHTML.includes('HB9 ↓ USDT'), 'BNB mode does not expose HB9 reverse direction');
+  assert(!context.page.innerHTML.includes('<span>HB9</span><strong aria-hidden="true">⇅</strong><span>USDT</span>'), 'BNB mode does not expose HB9 reverse direction');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'switching back refreshes BNB chart');
 
   const delayedHb9 = createContext({ delayedApi: true });
