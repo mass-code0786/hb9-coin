@@ -51,6 +51,6 @@ assert.strictEqual(ledger.length, 3, 'each successful transfer creates a wallet 
 assert(ledger.every(item => item.reason && ['credit', 'debit'].includes(item.direction)), 'ledger entries carry reason and direction');
 assert.strictEqual((db.auditLogs || []).filter(item => item.type === 'ADMIN_FUND_TRANSFER').length, 3, 'each successful transfer creates an admin audit log');
 assert.strictEqual((db.admin_fund_transfers || []).length, 3, 'successful transfers are reportable');
-assert.deepStrictEqual(walletBalances(db, 'usr_user'), { usdt: 40, withdrawableUsdt: 40, hb9: 25, totalDeposit: 0 }, 'wallet balances include admin fund transfers');
+assert.deepStrictEqual(walletBalances(db, 'usr_user'), { usdt: 40, withdrawableUsdt: 40, hb9: 25, bnb: 0, totalDeposit: 0 }, 'wallet balances include admin fund transfers');
 
 console.log('FUND TRANSFER SMOKE PASS: admin credit/debit, negative debit block, non-admin block, ledger, audit, and balances verified.');
