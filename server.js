@@ -1346,7 +1346,7 @@ const server=http.createServer(async(req,res)=>{
       return send(res,404,{error:'Route not found'});
     }
     const routePath=new URL(req.url,`http://${req.headers.host}`).pathname;
-    let f=(routePath==='/'||routePath==='/exchange'||routePath==='/admin')?'/index.html':decodeURIComponent(routePath);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f);res.writeHead(200,{'Content-Type':ext==='.html'?'text/html':ext==='.css'?'text/css':'application/javascript'});fs.createReadStream(f).pipe(res);
+    let f=(routePath==='/'||routePath==='/exchange'||routePath==='/admin')?'/index.html':decodeURIComponent(routePath);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f),types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log('DAILY_SCHEDULER_UTC',{globalTeam:'17:30',roi:'18:00'});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});

@@ -137,9 +137,9 @@ function createContext(options = {}) {
     money: value => `$${Number(value || 0).toFixed(2)}`,
     points: value => String(Number(value || 0)),
     esc: value => String(value ?? ''),
-    table: (headers, rows) => `<table><thead><tr>${headers.map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>`,
+    table: (headers, rows) => rows ? `<div class="tablewrap"><table class="table"><thead><tr>${headers.map(x => `<th>${x}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">No records</div>',
     USDTLogo: () => 'USDT',
-    HB9CoinLogo: () => 'HB9',
+    HB9CoinLogo: className => `<svg class="${className || 'hb9-coin-logo'}" aria-label="HB9 coin logo"></svg>`,
     badge: value => String(value),
     toast() {},
     loading: () => () => {},
@@ -183,8 +183,10 @@ async function tick() {
   assert(context.page.innerHTML.includes('BNB Exchange'), 'BNB selected title renders');
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected pair state renders');
   assert(context.page.innerHTML.includes('BNB Price'), 'BNB selected price card renders');
-  assert(context.page.innerHTML.includes('bnb-token-badge'), 'BNB logo fallback badge renders');
-  assert(!/<img[^>]+BNB/i.test(context.page.innerHTML), 'BNB fallback does not render a broken image tag');
+  assert(context.page.innerHTML.includes('exchange-history-scroll'), 'conversion history uses mobile horizontal scroll wrapper');
+  assert(context.page.innerHTML.includes('/assets/bnb-logo.svg'), 'BNB logo image renders from local asset');
+  assert(context.page.innerHTML.includes('bnb-token-fallback'), 'BNB logo keeps fallback if image fails');
+  assert(context.page.innerHTML.includes('onerror='), 'BNB logo image has no broken-image state');
   assert(!context.page.innerHTML.includes('HB9 Wallet'), 'BNB mode does not render HB9 wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'BNB chart widget uses BNBUSDT');
   assert(context.page.elements.chart.hasIframe, 'BNB chart is not blank');
@@ -202,6 +204,7 @@ async function tick() {
   assert(context.page.innerHTML.includes('HB9 Exchange'), 'HB9 selected title renders after switch');
   assert(context.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 selected pair state renders');
   assert(context.page.innerHTML.includes('HB9 Price'), 'HB9 selected price card renders');
+  assert(context.page.innerHTML.includes('hb9-coin-logo'), 'HB9 logo still renders');
   assert(!context.page.innerHTML.includes('BNB Wallet'), 'HB9 mode does not render BNB wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:ICPUSDT', 'HB9 chart widget uses existing ICP proxy');
   assert(context.page.elements.chart.hasIframe, 'HB9 chart is not blank after switch');
@@ -246,6 +249,12 @@ async function tick() {
   await tick();
   assert.notStrictEqual(delayedBnb.page.elements.marketPair.textContent, 'BNBUSDT', 'old delayed BNB response cannot overwrite HB9 pair');
   assert(delayedBnb.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 pair remains selected after old BNB response');
+
+  const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'exchange-fixes.css'), 'utf8');
+  assert(/\.exchange-history-scroll[\s\S]*overflow-x:\s*auto/.test(css), 'conversion history allows horizontal overflow');
+  assert(/-webkit-overflow-scrolling:\s*touch/.test(css), 'conversion history uses touch momentum scrolling');
+  assert(/\.exchange-history-scroll \.table[\s\S]*min-width:\s*760px/.test(css), 'conversion history table has mobile min-width');
+  assert(fs.existsSync(path.join(__dirname, '..', 'public', 'assets', 'bnb-logo.svg')), 'local BNB logo asset exists');
 
   console.log('exchange-ui-smoke ok');
 })().catch(error => {

@@ -1,0 +1,70 @@
+.bnb-token-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75em;
+  height: 1.75em;
+  border-radius: 999px;
+  vertical-align: middle;
+  overflow: hidden;
+  flex: 0 0 auto;
+  background: #f3ba2f;
+}
+
+.bnb-token-badge img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 999px;
+}
+
+.bnb-token-fallback {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: #f3ba2f;
+  color: #111827;
+  font-weight: 800;
+  font-size: .72em;
+  line-height: 1;
+  border: 1px solid rgba(0, 0, 0, .12);
+}
+
+.exchange-history-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 10px;
+  touch-action: pan-x;
+  overscroll-behavior-x: contain;
+}
+
+.exchange-history-scroll::after {
+  content: "Swipe to see more";
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.exchange-history-scroll .tablewrap {
+  min-width: 760px;
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+}
+
+.exchange-history-scroll .table {
+  min-width: 760px;
+  width: 760px;
+}
+
+.exchange-history-scroll th,
+.exchange-history-scroll td {
+  white-space: nowrap;
+}

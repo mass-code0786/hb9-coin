@@ -26,6 +26,9 @@ async function request(base, path, { method = 'GET', token, body } = {}) {
   readDB();
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
+  const logoResponse = await fetch(`${base}/assets/bnb-logo.svg`);
+  assert.strictEqual(logoResponse.status, 200);
+  assert((logoResponse.headers.get('content-type') || '').includes('image/svg+xml'));
 
   const adminLogin = await request(base, '/api/auth/login', {
     method: 'POST',
