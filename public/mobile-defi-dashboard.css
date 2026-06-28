@@ -245,7 +245,10 @@
     color:#8D78AA!important;
   }
   .defi-dashboard-page>.grid.stats{
-    display:none!important;
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:12px!important;
+    margin:16px 0!important;
   }
   .defi-dashboard-page .defi-volume-grid{
     display:grid!important;
@@ -294,7 +297,27 @@
   }
   .defi-dashboard-active .card.income:not(:has(.income-pairs)),
   .defi-dashboard-active .card.income:has(.incomegrid){
-    display:none!important;
+    display:block!important;
+  }
+  .defi-dashboard-active .incomegrid,
+  .defi-dashboard-active .progress-grid{
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:10px!important;
+  }
+  .defi-dashboard-active .incomeitem,
+  .defi-dashboard-active .progress-grid div,
+  .defi-dashboard-active .stat,
+  .defi-dashboard-active .main-balance-card{
+    min-width:0!important;
+    overflow-wrap:anywhere!important;
+  }
+  .defi-dashboard-active .incomeitem strong,
+  .defi-dashboard-active .progress-grid b,
+  .defi-dashboard-active .stat .value,
+  .defi-dashboard-active .main-balance-card strong{
+    overflow-wrap:anywhere!important;
+    word-break:break-word!important;
   }
   .defi-bottom-nav{
     position:fixed!important;
@@ -365,4 +388,9 @@
   .defi-dashboard-active .income-pair-details{max-width:154px!important}
   .defi-dashboard-active .income-pair strong{font-size:17px!important}
   .defi-dashboard-page .defi-volume-grid strong{font-size:18px!important}
+  .defi-dashboard-page>.grid.stats,
+  .defi-dashboard-active .incomegrid,
+  .defi-dashboard-active .progress-grid{
+    grid-template-columns:1fr!important;
+  }
 }
