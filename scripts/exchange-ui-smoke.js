@@ -26,6 +26,9 @@ class FakeElement {
   setAttribute(name, value) {
     this[name] = value;
   }
+  addEventListener(event, handler) {
+    if (event === 'click') this.onclick = handler;
+  }
   querySelector(selector) {
     if (selector === 'iframe' && this.hasIframe) return {};
     return null;
@@ -62,6 +65,7 @@ function createPage() {
         new FakeElement({ tvInterval: '240' }),
         new FakeElement({ tvInterval: 'D' })
       ];
+      this.elements.swapToggle = new FakeElement();
     },
     get innerHTML() {
       return this.html;
@@ -74,6 +78,7 @@ function createPage() {
       if (selector === '[data-market-base]') return this.elements.marketBase;
       if (selector === '[data-market-pair]') return this.elements.marketPair;
       if (selector === '[data-price-label]') return this.elements.priceLabel;
+      if (selector === '[data-swap-toggle]') return this.elements.swapToggle;
       if (selector.startsWith('[data-selected-asset=')) {
         const asset = /data-selected-asset="([^"]+)"/.exec(selector)?.[1];
         const pair = /data-selected-pair="([^"]+)"/.exec(selector)?.[1];
@@ -124,10 +129,11 @@ function createContext(options = {}) {
       apiCalls.push({ endpoint, options: requestOptions });
       if (endpoint === '/api/convert') {
         const payload = JSON.parse(requestOptions.body || '{}');
+        const isHb9Sell = payload.fromAsset === 'HB9' && payload.toAsset === 'USDT';
         return Promise.resolve({
-          message: `USDT converted to ${payload.toAsset}`,
-          balance: payload.toAsset === 'BNB' ? { usdt: 900, bnb: 1, hb9: 50 } : { usdt: 900, hb9: 500, bnb: 2 },
-          conversion: { id: `cnv_${payload.toAsset}`, orderId: `ord_${payload.toAsset}`, fromAsset: 'USDT', toAsset: payload.toAsset, fromAmount: payload.amount, toAmount: 1, price: 1, createdAt: new Date().toISOString() }
+          message: `${payload.fromAsset} converted to ${payload.toAsset}`,
+          balance: payload.toAsset === 'BNB' ? { usdt: 900, bnb: 1, hb9: 50 } : isHb9Sell ? { usdt: 1001, hb9: 49, bnb: 2 } : { usdt: 900, hb9: 500, bnb: 2 },
+          conversion: { id: `cnv_${payload.fromAsset}_${payload.toAsset}`, orderId: `ord_${payload.fromAsset}_${payload.toAsset}`, fromAsset: payload.fromAsset, toAsset: payload.toAsset, fromAmount: payload.amount, toAmount: isHb9Sell ? 1 : 1, price: 1, createdAt: new Date().toISOString() }
         });
       }
       if (options.delayedApi) {
@@ -207,7 +213,7 @@ async function tick() {
   assert.strictEqual(bnbPayload.fromAsset, 'USDT', 'BNB frontend payload includes USDT fromAsset');
   assert.strictEqual(bnbPayload.toAsset, 'BNB', 'BNB frontend payload includes BNB toAsset');
   assert.strictEqual(bnbPayload.amount, 25, 'BNB frontend payload includes amount');
-  assert(/^convert-bnb-/.test(bnbPayload.clientRequestId), 'BNB frontend payload includes clientRequestId');
+  assert(/^convert-usdt-bnb-/.test(bnbPayload.clientRequestId), 'BNB frontend payload includes pair clientRequestId');
   assert.strictEqual(context.__loadCount(), 1, 'BNB convert refreshes dashboard data');
 
   context.page.elements.assetButtons[0].onclick();
@@ -215,7 +221,12 @@ async function tick() {
   historyHtml = context.page.innerHTML.match(/<section class="card exchange-history-card"[\s\S]*?<\/section><\/section>$/)?.[0] || '';
   assert(context.page.innerHTML.includes('HB9 Exchange'), 'HB9 selected title renders after switch');
   assert(context.page.innerHTML.includes('data-selected-pair="HB9USDT"'), 'HB9 selected pair state renders');
+  assert(context.page.innerHTML.includes('data-swap-direction="USDT_HB9"'), 'HB9 default swap direction is USDT to HB9');
   assert(context.page.innerHTML.includes('HB9 Price'), 'HB9 selected price card renders');
+  assert(context.page.innerHTML.includes('USDT Amount'), 'HB9 default from label is USDT Amount');
+  assert(context.page.innerHTML.includes('HB9 You Receive'), 'HB9 default receive label is HB9');
+  assert(context.page.innerHTML.includes('USDT ↓ HB9'), 'HB9 default swap toggle shows direction');
+  assert(context.page.innerHTML.includes('Convert to HB9'), 'HB9 default button converts to HB9');
   assert(context.page.innerHTML.includes('hb9-coin-logo'), 'HB9 logo still renders');
   assert(historyHtml.includes('1.00 USDT'), 'HB9 history formats USDT with 2 decimals');
   assert(historyHtml.includes('0.4444 HB9'), 'HB9 history formats received amount compactly');
@@ -229,12 +240,38 @@ async function tick() {
   assert.strictEqual(hb9Payload.fromAsset, 'USDT', 'HB9 frontend payload includes USDT fromAsset');
   assert.strictEqual(hb9Payload.toAsset, 'HB9', 'HB9 frontend payload includes HB9 toAsset');
   assert.strictEqual(hb9Payload.amount, 10, 'HB9 frontend payload includes amount');
-  assert(/^convert-hb9-/.test(hb9Payload.clientRequestId), 'HB9 frontend payload includes clientRequestId');
+  assert(/^convert-usdt-hb9-/.test(hb9Payload.clientRequestId), 'HB9 frontend payload includes pair clientRequestId');
   assert.strictEqual(context.__loadCount(), 2, 'HB9 convert refreshes dashboard data');
+
+  context.page.elements.swapToggle.onclick();
+  await tick();
+  assert(context.page.innerHTML.includes('data-swap-direction="HB9_USDT"'), 'HB9 swap toggle reverses direction');
+  assert(context.page.innerHTML.includes('HB9 Wallet'), 'reversed swap shows HB9 wallet as source');
+  assert(context.page.innerHTML.includes('HB9 Amount'), 'reversed swap from label is HB9 Amount');
+  assert(context.page.innerHTML.includes('USDT You Receive'), 'reversed swap receive label is USDT');
+  assert(context.page.innerHTML.includes('HB9 ↓ USDT'), 'reversed swap toggle shows direction');
+  assert(context.page.innerHTML.includes('Convert to USDT'), 'reversed swap button converts to USDT');
+  context.page.elements.form.elements.swapAmount.value = '5';
+  context.page.elements.form.elements.swapAmount.oninput();
+  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '1.00 USDT', 'reversed swap receive amount follows backend-priced market quote');
+  await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
+  const hb9SellPayload = JSON.parse(context.__apiCalls.filter(call => call.endpoint === '/api/convert').at(-1).options.body);
+  assert.strictEqual(hb9SellPayload.fromAsset, 'HB9', 'reversed swap payload includes HB9 fromAsset');
+  assert.strictEqual(hb9SellPayload.toAsset, 'USDT', 'reversed swap payload includes USDT toAsset');
+  assert.strictEqual(hb9SellPayload.amount, 5, 'reversed swap payload includes amount');
+  assert(/^convert-hb9-usdt-/.test(hb9SellPayload.clientRequestId), 'reversed swap frontend payload includes pair clientRequestId');
+  assert.strictEqual(context.__loadCount(), 3, 'HB9 to USDT convert refreshes dashboard data');
+
+  context.page.elements.swapToggle.onclick();
+  await tick();
+  assert(context.page.innerHTML.includes('data-swap-direction="USDT_HB9"'), 'HB9 swap toggle switches back to USDT to HB9');
+  assert(context.page.innerHTML.includes('USDT Amount'), 'switching back restores USDT Amount label');
+  assert(context.page.innerHTML.includes('Convert to HB9'), 'switching back restores Convert to HB9 button');
 
   context.page.elements.assetButtons[1].onclick();
   await tick();
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'switching back updates pair to BNBUSDT');
+  assert(!context.page.innerHTML.includes('HB9 ↓ USDT'), 'BNB mode does not expose HB9 reverse direction');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'switching back refreshes BNB chart');
 
   const delayedHb9 = createContext({ delayedApi: true });

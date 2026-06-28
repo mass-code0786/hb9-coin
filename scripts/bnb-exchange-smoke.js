@@ -102,14 +102,29 @@ function dbFixture() {
   assert.strictEqual(retry.order.id, hb9Buy.order.id);
   assert.strictEqual(db.wallet_ledger.length, beforeRetryLedger);
 
+  const hb9Sell = await convertUsdtToAsset(db, user, { fromAsset: 'HB9', toAsset: 'USDT', amount: 100, price: 999, clientRequestId: 'hb9-sell-1' });
+  assert.strictEqual(hb9Sell.order.fromAsset, 'HB9');
+  assert.strictEqual(hb9Sell.order.toAsset, 'USDT');
+  assert.strictEqual(hb9Sell.order.direction, 'sell');
+  assert.strictEqual(hb9Sell.order.toAmount, 20);
+  assert.strictEqual(hb9Sell.order.price, 0.2, 'server-side HB9 price is used instead of frontend price');
+  assert.strictEqual(hb9Sell.balance.usdt, 920);
+  assert.strictEqual(hb9Sell.balance.hb9, 400);
+  assert(db.wallet_ledger.some(x => x.refId === hb9Sell.order.id && x.asset === 'HB9' && x.direction === 'debit'));
+  assert(db.wallet_ledger.some(x => x.refId === hb9Sell.order.id && x.asset === 'USDT' && x.direction === 'credit'));
+  const beforeSellRetryLedger = db.wallet_ledger.length;
+  const hb9SellRetry = await convertUsdtToAsset(db, user, { fromAsset: 'HB9', toAsset: 'USDT', amount: 100, clientRequestId: 'hb9-sell-1' });
+  assert.strictEqual(hb9SellRetry.order.id, hb9Sell.order.id);
+  assert.strictEqual(db.wallet_ledger.length, beforeSellRetryLedger);
+
   const bnbBuy = await convertUsdtToAsset(db, user, { amount: 600, toAsset: 'BNB' });
   assert.strictEqual(bnbBuy.order.toAsset, 'BNB');
   assert.strictEqual(bnbBuy.order.toAmount, 1);
   assert.strictEqual(bnbBuy.conversion.toAsset, 'BNB');
-  assert.strictEqual(bnbBuy.balance.usdt, 300);
+  assert.strictEqual(bnbBuy.balance.usdt, 320);
   assert.strictEqual(walletBalances(db, user.id).bnb, 1);
   assert.strictEqual(dashboard(db, user).wallets.bnb, 1);
-  assert.strictEqual(dashboard(db, user).conversions.length, 2);
+  assert.strictEqual(dashboard(db, user).conversions.length, 3);
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'USDT' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'BNB' && x.direction === 'credit'));
 
@@ -121,7 +136,7 @@ function dbFixture() {
   const hb9Stake = await createStake(db, user, { amount: 100, stakeAsset: 'HB9' });
   assert.strictEqual(hb9Stake.stakeAsset, 'HB9');
   assert.strictEqual(hb9Stake.hb9EquivalentAmount, 100);
-  assert.strictEqual(walletBalances(db, user.id).hb9, 400);
+  assert.strictEqual(walletBalances(db, user.id).hb9, 300);
 
   const bnbStake = await createStake(db, user, { amount: 0.5, stakeAsset: 'BNB', clientRequestId: 'bnb-stake-1' });
   assert.strictEqual(bnbStake.stakeAsset, 'BNB');

@@ -222,7 +222,10 @@ function burnTotal(db){ensureSupply(db);return roundCurrency(db.burn_ledger.redu
 function exchangeReserveReport(db){
   ensureSupply(db);
   const buyConversions=(db.conversions||[]).filter(x=>(!x.direction||x.direction==='buy')&&x.status!=='failed');
-  const hb9Sold=roundCurrency(buyConversions.filter(x=>(x.toAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.toAmount)||0),0));
+  const sellConversions=(db.conversions||[]).filter(x=>x.direction==='sell'&&x.status!=='failed');
+  const hb9Bought=buyConversions.filter(x=>(x.toAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.toAmount)||0),0);
+  const hb9Returned=sellConversions.filter(x=>(x.fromAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.fromAmount)||0),0);
+  const hb9Sold=roundCurrency(Math.max(0,hb9Bought-hb9Returned));
   const bnbSold=roundCurrency(buyConversions.filter(x=>x.toAsset==='BNB').reduce((n,x)=>n+(Number(x.bnbAmount)||Number(x.toAmount)||0),0));
   const bnbWallet=reserveWallet(db,'BNB','exchange');
   const bnbRemaining=roundCurrency(Number(bnbWallet?.balance)||0);
@@ -828,28 +831,32 @@ async function assetBuyPrice(db,asset){
 async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9',clientRequestId=null}={}){
   if(!db.settings.exchangeEnabled)throw Error('Exchange is disabled');
   const normalizedFrom=String(fromAsset||'USDT').toUpperCase(), value=roundCurrency(Number(amount)), normalized=String(toAsset||'HB9').toUpperCase();
-  if(normalizedFrom!=='USDT')throw Error('Convert from asset must be USDT');
-  if(!['HB9','BNB'].includes(normalized))throw Error('Conversion asset must be HB9 or BNB');
+  if(!((normalizedFrom==='USDT'&&['HB9','BNB'].includes(normalized))||(normalizedFrom==='HB9'&&normalized==='USDT')))throw Error('Conversion pair must be USDT/HB9, HB9/USDT, or USDT/BNB');
   if(!Number.isFinite(value)||value<=0)throw Error('Conversion amount is invalid');
   if(clientRequestId&&db.exchange_orders?.some(x=>x.userId===user.id&&x.clientRequestId===clientRequestId)){const order=db.exchange_orders.find(x=>x.userId===user.id&&x.clientRequestId===clientRequestId);return {duplicate:true,order,conversion:(db.conversions||[]).find(x=>x.id===order.conversionId||x.orderId===order.id||x.id===order.id),balance:walletBalances(db,user.id)};}
   const balances=walletBalances(db,user.id);
-  if(value>balances.usdt)throw Error('Not enough USDT balance');
-  const {price,market}=await assetBuyPrice(db,normalized);
-  if(!Number.isFinite(price)||price<=0)throw Error(`${normalized} price is unavailable`);
-  const fee=normalized==='HB9'?setting(db,'tradingFeePercent')+setting(db,'buyFeePercent'):0;
-  const toAmount=roundCurrency(value/price*(1-fee/100));
+  if(value>Number(balances[normalizedFrom.toLowerCase()]||0))throw Error(`Not enough ${normalizedFrom} balance`);
+  const priceAsset=normalizedFrom==='HB9'?'HB9':normalized;
+  const {price,market}=await assetBuyPrice(db,priceAsset);
+  if(!Number.isFinite(price)||price<=0)throw Error(`${priceAsset} price is unavailable`);
+  const fee=normalizedFrom==='USDT'&&normalized==='HB9'?setting(db,'tradingFeePercent')+setting(db,'buyFeePercent'):0;
+  const sellFee=normalizedFrom==='HB9'&&normalized==='USDT'?setting(db,'tradingFeePercent')+setting(db,'sellFeePercent'):0;
+  const toAmount=normalizedFrom==='HB9'?roundCurrency(value*price*(1-sellFee/100)):roundCurrency(value/price*(1-fee/100));
   const reserveReport=exchangeReserveReport(db);
-  if(normalized==='HB9'&&toAmount>reserveReport.hb9.remaining)throw Error('HB9 reserve is insufficient');
+  if(normalizedFrom==='USDT'&&normalized==='HB9'&&toAmount>reserveReport.hb9.remaining)throw Error('HB9 reserve is insufficient');
   if(normalized==='BNB'&&!reserveReport.bnb.configured)throw Error('BNB reserve not configured');
   if(normalized==='BNB'&&toAmount>reserveReport.bnb.remaining)throw Error('BNB reserve insufficient');
+  if(normalizedFrom==='HB9'&&reserveWallet(db,'USDT','treasury').balance<toAmount)throw Error('USDT reserve is insufficient');
   const orderId=id('xord'),createdAt=new Date().toISOString();
-  if(normalized==='HB9')db.reserve_ledger.push({id:id('rsv'),asset:'HB9',walletType:'exchange',direction:'sold',amount:toAmount,balanceAfter:roundCurrency(reserveReport.hb9.remaining-toAmount),reason:'HB9 exchange reserve sold',refId:orderId,userId:user.id,createdAt,immutable:true});
+  if(normalizedFrom==='USDT'&&normalized==='HB9')db.reserve_ledger.push({id:id('rsv'),asset:'HB9',walletType:'exchange',direction:'sold',amount:toAmount,balanceAfter:roundCurrency(reserveReport.hb9.remaining-toAmount),reason:'HB9 exchange reserve sold',refId:orderId,userId:user.id,createdAt,immutable:true});
   if(normalized==='BNB')reserveMove(db,{asset:'BNB',walletType:'exchange',direction:'debit',amount:toAmount,reason:'BNB buy',userId:user.id,refId:orderId});
-  reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:value,reason:`${normalized} buy`,userId:user.id,refId:orderId});
-  walletEntry(db,{userId:user.id,asset:'USDT',direction:'debit',amount:value,reason:`${normalized} buy`,refId:orderId});
-  walletEntry(db,{userId:user.id,asset:normalized,direction:'credit',amount:toAmount,reason:`${normalized} buy`,refId:orderId});
+  if(normalizedFrom==='HB9')reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'debit',amount:toAmount,reason:'HB9 swap payout',userId:user.id,refId:orderId});
+  else reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'credit',amount:value,reason:`${normalized} buy`,userId:user.id,refId:orderId});
+  walletEntry(db,{userId:user.id,asset:normalizedFrom,direction:'debit',amount:value,reason:`${normalizedFrom} to ${normalized} swap`,refId:orderId});
+  walletEntry(db,{userId:user.id,asset:normalized,direction:'credit',amount:toAmount,reason:`${normalizedFrom} to ${normalized} swap`,refId:orderId});
   db.conversions=db.conversions||[];db.exchange_orders=db.exchange_orders||[];
-  const conversionId=id('cnv'), order={id:orderId,conversionId,userId:user.id,direction:'buy',fromAsset:'USDT',toAsset:normalized,fromAmount:value,toAmount,usdtAmount:value,[normalized==='HB9'?'hb9Amount':'bnbAmount']:toAmount,rate:price,price,buyPrice:price,sellPrice:market.sellPrice||price,feePercent:fee,status:'completed',clientRequestId,createdAt,immutable:true};
+  const direction=normalizedFrom==='HB9'?'sell':'buy', conversionAmounts=normalizedFrom==='HB9'?{hb9Amount:value,usdtAmount:toAmount}:{usdtAmount:value,[normalized==='HB9'?'hb9Amount':'bnbAmount']:toAmount};
+  const conversionId=id('cnv'), order={id:orderId,conversionId,userId:user.id,direction,fromAsset:normalizedFrom,toAsset:normalized,fromAmount:value,toAmount,...conversionAmounts,rate:price,price,buyPrice:price,sellPrice:market.sellPrice||price,feePercent:normalizedFrom==='HB9'?sellFee:fee,status:'completed',clientRequestId,createdAt,immutable:true};
   const conversion={...order,id:conversionId,orderId};
   db.conversions.push(conversion);
   db.exchange_orders.push(order);
@@ -1329,7 +1336,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/deposit-address'&&method==='GET')return send(res,410,{error:'HD wallet deposit addresses are disabled. Use NOWPayments deposits.'});
       if(p==='/api/deposits'&&method==='POST'){try{const input=await body(req),result=await createNowPaymentsDeposit(db,u.id,input.amount);writeDB(db);return send(res,201,{message:'NOWPayments deposit created',deposit:result.deposit,payment:result.payment,service:result.service});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/internal/deposit-events'&&method==='POST')return send(res,410,{error:'BEP20 watcher deposit ingestion is disabled'});
-      if(p==='/api/convert'&&method==='POST'){let input={};try{input=await body(req);console.log('CONVERT_REQUEST_RECEIVED',{userId:u.id,fromAsset:input.fromAsset||'USDT',toAsset:input.toAsset||'HB9',amount:Number(input.amount),clientRequestId:input.clientRequestId||null,createdAt:new Date().toISOString()});const result=await convertUsdtToAsset(db,u,input);writeDB(db);console.log('CONVERT_SUCCESS',{userId:u.id,orderId:result.order.id,conversionId:result.conversion?.id||null,fromAsset:result.order.fromAsset,toAsset:result.order.toAsset,fromAmount:result.order.fromAmount,toAmount:result.order.toAmount,duplicate:result.duplicate,createdAt:new Date().toISOString()});return send(res,result.duplicate?200:201,{message:result.duplicate?'Conversion already completed':`USDT converted to ${result.order.toAsset}`,order:result.order,conversion:result.conversion,balance:result.balance,balances:result.balance,hb9Amount:result.order.hb9Amount,bnbAmount:result.order.bnbAmount,buyPrice:result.order.buyPrice});}catch(error){console.log('CONVERT_FAILED',{userId:u.id,fromAsset:input.fromAsset||'USDT',toAsset:input.toAsset||'HB9',amount:Number(input.amount),clientRequestId:input.clientRequestId||null,error:error.message,createdAt:new Date().toISOString()});return send(res,/disabled/.test(error.message)?403:400,{error:error.message});}}
+      if(p==='/api/convert'&&method==='POST'){let input={};try{input=await body(req);console.log('CONVERT_REQUEST_RECEIVED',{userId:u.id,fromAsset:input.fromAsset||'USDT',toAsset:input.toAsset||'HB9',amount:Number(input.amount),clientRequestId:input.clientRequestId||null,createdAt:new Date().toISOString()});const result=await convertUsdtToAsset(db,u,input);writeDB(db);console.log('CONVERT_SUCCESS',{userId:u.id,orderId:result.order.id,conversionId:result.conversion?.id||null,fromAsset:result.order.fromAsset,toAsset:result.order.toAsset,fromAmount:result.order.fromAmount,toAmount:result.order.toAmount,duplicate:result.duplicate,createdAt:new Date().toISOString()});return send(res,result.duplicate?200:201,{message:result.duplicate?'Conversion already completed':`${result.order.fromAsset} converted to ${result.order.toAsset}`,order:result.order,conversion:result.conversion,balance:result.balance,balances:result.balance,hb9Amount:result.order.hb9Amount,bnbAmount:result.order.bnbAmount,buyPrice:result.order.buyPrice});}catch(error){console.log('CONVERT_FAILED',{userId:u.id,fromAsset:input.fromAsset||'USDT',toAsset:input.toAsset||'HB9',amount:Number(input.amount),clientRequestId:input.clientRequestId||null,error:error.message,createdAt:new Date().toISOString()});return send(res,/disabled/.test(error.message)?403:400,{error:error.message});}}
       if(p==='/api/exchange/sell'&&method==='POST'){if(!db.settings.exchangeEnabled)return send(res,403,{error:'Exchange is disabled'});const {amount}=await body(req), hb9Amount=Number(amount), balances=walletBalances(db,u.id), market=await exchangeMarket(db), rate=market.sellPrice, fee=setting(db,'tradingFeePercent')+setting(db,'sellFeePercent');if(!Number.isFinite(hb9Amount)||hb9Amount<=0)return send(res,400,{error:'HB9 amount is invalid'});if(hb9Amount>balances.hb9)return send(res,400,{error:'Not enough HB9 wallet balance'});const usdtAmount=roundCurrency(hb9Amount*rate*(1-fee/100));if(reserveWallet(db,'USDT','treasury').balance<usdtAmount)return send(res,400,{error:'USDT reserve is insufficient'});const orderId=id('xord'),createdAt=new Date().toISOString();reserveMove(db,{asset:'USDT',walletType:'treasury',direction:'debit',amount:usdtAmount,reason:'HB9 sell payout',userId:u.id,refId:orderId});burnHb9(db,{amount:hb9Amount,reason:'HB9 sell burn',userId:u.id,refId:orderId});walletEntry(db,{userId:u.id,asset:'HB9',direction:'debit',amount:hb9Amount,reason:'HB9 sell burn',refId:orderId});walletEntry(db,{userId:u.id,asset:'USDT',direction:'credit',amount:usdtAmount,reason:'HB9 sell payout',refId:orderId});db.conversions=(db.conversions||[]);db.exchange_orders=db.exchange_orders||[];const order={id:orderId,userId:u.id,direction:'sell',hb9Amount,usdtAmount,rate,sellPrice:rate,buyPrice:market.buyPrice,feePercent:fee,status:'completed',burnedHb9:hb9Amount,createdAt,immutable:true};db.conversions.push({id:id('cnv'),...order});db.exchange_orders.push(order);writeDB(db);return send(res,201,{message:'HB9 converted to USDT and burned',usdtAmount,sellPrice:rate,burnedHb9:hb9Amount,totalBurnedHb9:burnTotal(db),remainingHb9Supply:solvencyReport(db).remainingHb9Supply,circulatingHb9:solvencyReport(db).circulatingHb9});}
       if(p==='/api/stakes'&&method==='POST'){try{const stake=await createStake(db,u,await body(req));writeDB(db);return send(res,201,{message:`${stake.stakeAsset} permanent stake created`,stake});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/transfers'&&method==='GET'){const records=(db.transferLedger||[]).filter(x=>x.userId===u.id).map(x=>({...x,counterparty:safeUser(userById(db,x.counterpartyId))}));return send(res,200,{transfers:records});}
