@@ -96,6 +96,8 @@ function createContext(options = {}) {
   const storage = {};
   const widgets = [];
   const pendingApi = [];
+  const apiCalls = [];
+  let loadCount = 0;
   const context = {
     pages: {},
     data: {
@@ -115,7 +117,16 @@ function createContext(options = {}) {
       getItem: key => storage[key] || null,
       setItem: (key, value) => { storage[key] = String(value); }
     },
-    api: endpoint => {
+    api: (endpoint, requestOptions = {}) => {
+      apiCalls.push({ endpoint, options: requestOptions });
+      if (endpoint === '/api/convert') {
+        const payload = JSON.parse(requestOptions.body || '{}');
+        return Promise.resolve({
+          message: `USDT converted to ${payload.toAsset}`,
+          balance: payload.toAsset === 'BNB' ? { usdt: 900, bnb: 1, hb9: 50 } : { usdt: 900, hb9: 500, bnb: 2 },
+          conversion: { id: `cnv_${payload.toAsset}`, orderId: `ord_${payload.toAsset}`, fromAsset: 'USDT', toAsset: payload.toAsset, fromAmount: payload.amount, toAmount: 1, price: 1, createdAt: new Date().toISOString() }
+        });
+      }
       if (options.delayedApi) {
         return new Promise(resolve => pendingApi.push({ endpoint, resolve }));
       }
@@ -132,7 +143,7 @@ function createContext(options = {}) {
     badge: value => String(value),
     toast() {},
     loading: () => () => {},
-    load() {},
+    load: async () => { loadCount++; },
     render() {},
     loadTradingViewScript: () => Promise.resolve(),
     setInterval: () => 1,
@@ -150,6 +161,8 @@ function createContext(options = {}) {
   context.TradingView = context.window.TradingView;
   context.__widgets = widgets;
   context.__pendingApi = pendingApi;
+  context.__apiCalls = apiCalls;
+  context.__loadCount = () => loadCount;
   return context;
 }
 
@@ -173,6 +186,14 @@ async function tick() {
   assert(!context.page.innerHTML.includes('HB9 Wallet'), 'BNB mode does not render HB9 wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'BNB chart widget uses BNBUSDT');
   assert(context.page.elements.chart.hasIframe, 'BNB chart is not blank');
+  context.page.elements.form.elements.swapAmount.value = '25';
+  await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
+  const bnbPayload = JSON.parse(context.__apiCalls.filter(call => call.endpoint === '/api/convert').at(-1).options.body);
+  assert.strictEqual(bnbPayload.fromAsset, 'USDT', 'BNB frontend payload includes USDT fromAsset');
+  assert.strictEqual(bnbPayload.toAsset, 'BNB', 'BNB frontend payload includes BNB toAsset');
+  assert.strictEqual(bnbPayload.amount, 25, 'BNB frontend payload includes amount');
+  assert(/^convert-bnb-/.test(bnbPayload.clientRequestId), 'BNB frontend payload includes clientRequestId');
+  assert.strictEqual(context.__loadCount(), 1, 'BNB convert refreshes dashboard data');
 
   context.page.elements.assetButtons[0].onclick();
   await tick();
@@ -182,6 +203,14 @@ async function tick() {
   assert(!context.page.innerHTML.includes('BNB Wallet'), 'HB9 mode does not render BNB wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:ICPUSDT', 'HB9 chart widget uses existing ICP proxy');
   assert(context.page.elements.chart.hasIframe, 'HB9 chart is not blank after switch');
+  context.page.elements.form.elements.swapAmount.value = '10';
+  await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
+  const hb9Payload = JSON.parse(context.__apiCalls.filter(call => call.endpoint === '/api/convert').at(-1).options.body);
+  assert.strictEqual(hb9Payload.fromAsset, 'USDT', 'HB9 frontend payload includes USDT fromAsset');
+  assert.strictEqual(hb9Payload.toAsset, 'HB9', 'HB9 frontend payload includes HB9 toAsset');
+  assert.strictEqual(hb9Payload.amount, 10, 'HB9 frontend payload includes amount');
+  assert(/^convert-hb9-/.test(hb9Payload.clientRequestId), 'HB9 frontend payload includes clientRequestId');
+  assert.strictEqual(context.__loadCount(), 2, 'HB9 convert refreshes dashboard data');
 
   context.page.elements.assetButtons[1].onclick();
   await tick();

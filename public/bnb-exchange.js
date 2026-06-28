@@ -29,6 +29,16 @@
     ? HB9CoinLogo('hb9-coin-logo hb9-coin-logo--swap')
     : `<span class="swap-token-badge" style="font-weight:800">BNB</span>`;
   const walletLine = (label, value, suffix = '') => `<div><small>${label}</small><b class="wallet-balance-line">${value}${suffix}</b></div>`;
+  const convertRequestId = asset => `convert-${asset.toLowerCase()}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  const convertErrorMessage = error => {
+    const message = error?.message || 'Server error';
+    if (/Authentication required|auth/i.test(message)) return 'Session expired. Please log in again.';
+    if (/Not enough USDT/i.test(message)) return 'Insufficient USDT balance.';
+    if (/invalid/i.test(message)) return 'Enter a valid USDT amount.';
+    if (/price.*unavailable/i.test(message)) return 'Live price is unavailable. Try again shortly.';
+    if (/Network/i.test(message)) return 'Network request failed. Check your connection.';
+    return message || 'Server error';
+  };
 
   function renderMarketTradingView(symbol, interval = 'D', asset = activeExchangeAsset, renderId = exchangeRenderId) {
     const container = page.querySelector('[data-tradingview-container]');
@@ -166,12 +176,18 @@
         amount.focus();
         return;
       }
-      const done = loading(event.submitter, 'Converting...');
+      const submitButton = event.submitter || form.querySelector('.swap-submit');
+      const done = loading(submitButton, 'Converting...');
       try {
-        toast((await api('/api/convert', { method: 'POST', body: JSON.stringify({ amount: amount.value, toAsset: asset }) })).message);
-        load();
+        const response = await api('/api/convert', { method: 'POST', body: JSON.stringify({ fromAsset: 'USDT', toAsset: asset, amount: value, clientRequestId: convertRequestId(asset) }) });
+        if (response.balance || response.balances) data.wallets = { ...(data.wallets || {}), ...(response.balance || response.balances) };
+        const conversion = response.conversion || response.order;
+        if (conversion) data.conversions = [...(data.conversions || []).filter(item => item.id !== conversion.id && item.orderId !== conversion.orderId), conversion];
+        toast(response.message || `USDT converted to ${asset}`);
+        if (typeof load === 'function') await load();
+        else pages['HB9 Exchange']();
       } catch (error) {
-        toast(error.message, 'error');
+        toast(convertErrorMessage(error), 'error');
       } finally {
         done();
       }

@@ -90,6 +90,8 @@ function dbFixture() {
   assert.strictEqual(hb9Buy.order.toAsset, 'HB9');
   assert.strictEqual(hb9Buy.order.fromAsset, 'USDT');
   assert.strictEqual(hb9Buy.order.toAmount, 500);
+  assert.strictEqual(hb9Buy.conversion.toAsset, 'HB9');
+  assert.strictEqual(hb9Buy.balance.usdt, 900);
   assert.strictEqual(walletBalances(db, user.id).hb9, 500);
   assert(db.wallet_ledger.some(x => x.refId === hb9Buy.order.id && x.asset === 'USDT' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === hb9Buy.order.id && x.asset === 'HB9' && x.direction === 'credit'));
@@ -102,8 +104,11 @@ function dbFixture() {
   const bnbBuy = await convertUsdtToAsset(db, user, { amount: 600, toAsset: 'BNB' });
   assert.strictEqual(bnbBuy.order.toAsset, 'BNB');
   assert.strictEqual(bnbBuy.order.toAmount, 1);
+  assert.strictEqual(bnbBuy.conversion.toAsset, 'BNB');
+  assert.strictEqual(bnbBuy.balance.usdt, 300);
   assert.strictEqual(walletBalances(db, user.id).bnb, 1);
   assert.strictEqual(dashboard(db, user).wallets.bnb, 1);
+  assert.strictEqual(dashboard(db, user).conversions.length, 2);
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'USDT' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === bnbBuy.order.id && x.asset === 'BNB' && x.direction === 'credit'));
 
