@@ -881,7 +881,11 @@ async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9'
   if(!Number.isFinite(price)||price<=0)throw Error(`${priceAsset} price is unavailable`);
   const fee=normalizedFrom==='USDT'&&normalized==='HB9'?setting(db,'tradingFeePercent')+setting(db,'buyFeePercent'):0;
   const sellFee=normalizedFrom==='HB9'&&normalized==='USDT'?setting(db,'tradingFeePercent')+setting(db,'sellFeePercent'):0;
-  const toAmount=normalizedFrom==='HB9'?roundAssetAmount(normalized,value*price*(1-sellFee/100)):roundAssetAmount(normalized,value/price*(1-fee/100));
+  const isHb9Sell=normalizedFrom==='HB9'&&normalized==='USDT';
+  const reinvestAmountHb9=isHb9Sell?roundAssetAmount('HB9',value*.2):0;
+  const convertedAmountHb9=isHb9Sell?roundAssetAmount('HB9',value-reinvestAmountHb9):0;
+  const sellBaseAmount=isHb9Sell?convertedAmountHb9:value;
+  const toAmount=isHb9Sell?roundAssetAmount(normalized,sellBaseAmount*price*(1-sellFee/100)):roundAssetAmount(normalized,value/price*(1-fee/100));
   const reserveReport=exchangeReserveReport(db);
   if(normalizedFrom==='USDT'&&normalized==='HB9'&&toAmount>reserveReport.hb9.remaining)throw Error('HB9 reserve is insufficient');
   if(normalized==='BNB'&&!reserveReport.bnb.configured)throw Error('BNB reserve not configured');
@@ -895,12 +899,18 @@ async function convertUsdtToAsset(db,user,{fromAsset='USDT',amount,toAsset='HB9'
   walletEntry(db,{userId:user.id,asset:normalizedFrom,direction:'debit',amount:value,reason:`${normalizedFrom} to ${normalized} swap`,refId:orderId});
   walletEntry(db,{userId:user.id,asset:normalized,direction:'credit',amount:toAmount,reason:`${normalizedFrom} to ${normalized} swap`,refId:orderId});
   db.conversions=db.conversions||[];db.exchange_orders=db.exchange_orders||[];
-  const direction=normalizedFrom==='HB9'?'sell':'buy', conversionAmounts=normalizedFrom==='HB9'?{hb9Amount:value,usdtAmount:toAmount}:{usdtAmount:value,[normalized==='HB9'?'hb9Amount':'bnbAmount']:toAmount};
+  let autoReinvestStake=null;
+  if(isHb9Sell&&reinvestAmountHb9>0){
+    autoReinvestStake={id:id('stk'),userId:user.id,clientRequestId:clientRequestId?`${clientRequestId}:auto-reinvest`:null,stakeAsset:'HB9',stakeAmount:reinvestAmountHb9,stakeUsdValue:roundCurrency(reinvestAmountHb9*price),amount:roundCurrency(reinvestAmountHb9*price),usdValueAtStake:roundCurrency(reinvestAmountHb9*price),hb9EquivalentAmount:reinvestAmountHb9,coinAmount:reinvestAmountHb9,hb9Amount:reinvestAmountHb9,hb9PriceAtStake:price,bnbPriceAtStake:null,source:'AUTO_REINVEST_FROM_CONVERSION',relatedConversionId:null,status:'active',stakeDate:today(),startDate:today(),dailyRate:db.settings.dailyRoi/100,createdAt};
+    db.stakes.push(autoReinvestStake);
+  }
+  const direction=normalizedFrom==='HB9'?'sell':'buy', conversionAmounts=isHb9Sell?{hb9Amount:convertedAmountHb9,usdtAmount:toAmount,reinvestAmountHb9,convertedAmountHb9}:{usdtAmount:value,[normalized==='HB9'?'hb9Amount':'bnbAmount']:toAmount};
   const conversionId=id('cnv'), order={id:orderId,conversionId,userId:user.id,direction,fromAsset:normalizedFrom,toAsset:normalized,fromAmount:value,toAmount,...conversionAmounts,rate:price,price,buyPrice:price,sellPrice:market.sellPrice||price,feePercent:normalizedFrom==='HB9'?sellFee:fee,status:'completed',clientRequestId,createdAt,immutable:true};
   const conversion={...order,id:conversionId,orderId};
+  if(autoReinvestStake){autoReinvestStake.relatedConversionId=conversionId;order.autoReinvestStakeId=autoReinvestStake.id;conversion.autoReinvestStakeId=autoReinvestStake.id;}
   db.conversions.push(conversion);
   db.exchange_orders.push(order);
-  return {duplicate:false,order,conversion,balance:walletBalances(db,user.id)};
+  return {duplicate:false,order,conversion,autoReinvestStake,balance:walletBalances(db,user.id)};
 }
 async function createStake(db,user,{amount,stakeAsset='HB9',clientRequestId=null}={}){
   const normalized=String(stakeAsset||'HB9').toUpperCase(), stakeAmount=roundAssetAmount(normalized,Number(amount)), balances=walletBalances(db,user.id);

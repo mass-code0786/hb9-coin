@@ -112,6 +112,7 @@ function createContext(options = {}) {
       settings: { hb9Price: 0.2, market: { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
       conversions: [
         { id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, toAmount: 0.0008971184, price: 557.33, status: 'completed', createdAt: '2026-06-28T10:00:00.000Z' },
+        { id: 'cnv_hb9_sell_ui', fromAsset: 'HB9', toAsset: 'USDT', fromAmount: 100, reinvestAmountHb9: 20, convertedAmountHb9: 80, toAmount: 16, price: 0.2, status: 'completed', createdAt: '2026-06-28T10:02:00.000Z' },
         { id: 'cnv_hb9_ui', fromAsset: 'USDT', toAsset: 'HB9', fromAmount: 1, toAmount: 0.444444, price: 2.25, status: 'completed', createdAt: '2026-06-28T10:01:00.000Z' }
       ],
       stakes: []
@@ -243,6 +244,9 @@ async function tick() {
   assert(context.page.innerHTML.includes('hb9-coin-logo'), 'HB9 logo still renders');
   assert(historyHtml.includes('1.00 USDT'), 'HB9 history formats USDT with 2 decimals');
   assert(historyHtml.includes('0.4444 HB9'), 'HB9 history formats received amount compactly');
+  assert(historyHtml.includes('Auto Reinvest'), 'HB9 sell history shows auto reinvest split');
+  assert(historyHtml.includes('20 HB9'), 'HB9 sell history formats auto reinvest amount');
+  assert(historyHtml.includes('16.00 USDT'), 'HB9 sell history formats 80 percent USDT received amount');
   assert(!/bnb-token-badge|hb9-coin-logo|<img|<svg/.test(historyHtml), 'HB9 conversion history rows do not render token logos');
   assert(!context.page.innerHTML.includes('BNB Wallet'), 'HB9 mode does not render BNB wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:ICPUSDT', 'HB9 chart widget uses existing ICP proxy');
@@ -266,7 +270,9 @@ async function tick() {
   assert(context.page.innerHTML.includes('<button class="primary swap-submit">Convert</button>'), 'reversed swap submit button renders');
   context.page.elements.form.elements.swapAmount.value = '5';
   context.page.elements.form.elements.swapAmount.oninput();
-  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '1.00 USDT', 'reversed swap receive amount follows backend-priced market quote');
+  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '0.80 USDT', 'reversed swap receive amount previews 80 percent conversion');
+  assert(context.page.innerHTML.includes('data-swap-preview'), 'reversed swap renders split preview container');
+  assert(context.page.elements.form.elements.swapOutput.value !== '1.00 USDT', 'reversed swap no longer previews 100 percent conversion');
   await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
   const hb9SellPayload = JSON.parse(context.__apiCalls.filter(call => call.endpoint === '/api/convert').at(-1).options.body);
   assert.strictEqual(hb9SellPayload.fromAsset, 'HB9', 'reversed swap payload includes HB9 fromAsset');
