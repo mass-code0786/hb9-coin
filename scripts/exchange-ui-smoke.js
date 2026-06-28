@@ -103,7 +103,7 @@ function createContext(options = {}) {
     data: {
       wallets: { usdt: 1000, hb9: 50, bnb: 2 },
       settings: { hb9Price: 0.2, market: { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
-      conversions: [],
+      conversions: [{ id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 600, toAmount: 1, price: 600, createdAt: new Date().toISOString() }],
       stakes: []
     },
     page,
@@ -183,6 +183,8 @@ async function tick() {
   assert(context.page.innerHTML.includes('BNB Exchange'), 'BNB selected title renders');
   assert(context.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected pair state renders');
   assert(context.page.innerHTML.includes('BNB Price'), 'BNB selected price card renders');
+  assert(context.page.innerHTML.includes('bnb-token-badge'), 'BNB logo fallback badge renders');
+  assert(!/<img[^>]+BNB/i.test(context.page.innerHTML), 'BNB fallback does not render a broken image tag');
   assert(!context.page.innerHTML.includes('HB9 Wallet'), 'BNB mode does not render HB9 wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:BNBUSDT', 'BNB chart widget uses BNBUSDT');
   assert(context.page.elements.chart.hasIframe, 'BNB chart is not blank');

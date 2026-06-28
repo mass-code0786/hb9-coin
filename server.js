@@ -226,7 +226,7 @@ function exchangeReserveReport(db){
   const bnbSold=roundCurrency(buyConversions.filter(x=>x.toAsset==='BNB').reduce((n,x)=>n+(Number(x.bnbAmount)||Number(x.toAmount)||0),0));
   const bnbWallet=reserveWallet(db,'BNB','exchange');
   const bnbRemaining=roundCurrency(Number(bnbWallet?.balance)||0);
-  const bnbConfiguredTotal=BNB_EXCHANGE_RESERVE_TOTAL!==null?BNB_EXCHANGE_RESERVE_TOTAL:(bnbRemaining>0||bnbSold>0?roundCurrency(bnbRemaining+bnbSold):0);
+  const bnbConfiguredTotal=BNB_EXCHANGE_RESERVE_TOTAL!==null&&BNB_EXCHANGE_RESERVE_TOTAL>0?BNB_EXCHANGE_RESERVE_TOTAL:(bnbRemaining>0||bnbSold>0?roundCurrency(bnbRemaining+bnbSold):0);
   return {
     hb9:{asset:'HB9',total:roundCurrency(HB9_EXCHANGE_RESERVE_TOTAL),sold:hb9Sold,remaining:roundCurrency(Math.max(0,HB9_EXCHANGE_RESERVE_TOTAL-hb9Sold)),configured:true},
     bnb:{asset:'BNB',total:roundCurrency(bnbConfiguredTotal),sold:bnbSold,remaining:bnbRemaining,configured:bnbConfiguredTotal>0||bnbRemaining>0}
