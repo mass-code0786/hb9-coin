@@ -260,6 +260,12 @@
         }).join('');
         document.querySelector('.report-stack').innerHTML = `<section class="card">${table(['Date','User','From','To','From Amount','To Amount','Price'], rows, 'No conversions', 'HB9 and BNB conversions will appear here.')}</section>`;
       }
+      if (adminTab === 'Reserves') {
+        const reserve = adminData.exchangeReserve || adminData.solvency?.exchangeReserve || {};
+        const hb9 = reserve.hb9 || {};
+        const bnb = reserve.bnb || {};
+        document.querySelector('.report-stack')?.insertAdjacentHTML('afterbegin', `<section class="card"><h2>Exchange Reserve</h2><div class="grid stats">${stat('HB9 Total Reserve', `${points(hb9.total || 0)} HB9`)}${stat('HB9 Sold', `${points(hb9.sold || 0)} HB9`)}${stat('HB9 Remaining', `${points(hb9.remaining || 0)} HB9`)}${stat('BNB Configured', bnb.configured ? `${points(bnb.total || 0)} BNB` : 'Not configured')}${stat('BNB Sold', `${points(bnb.sold || 0)} BNB`)}${stat('BNB Remaining', `${points(bnb.remaining || 0)} BNB`)}</div></section>`);
+      }
     };
   }
 
