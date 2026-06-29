@@ -2,9 +2,10 @@ process.env.MARKET_TEST_MODE = 'true';
 
 const assert = require('assert');
 const {
+  calculateB1IncomeForStake,
   dashboard,
   dailyB1Percent,
-  incomeContext,
+  getUserDirectBusinessUsd,
   runRoiDaily
 } = require('../server');
 const { repairWrongFlushedB1 } = require('./repair-wrong-flushed-b1');
@@ -92,21 +93,59 @@ function baseDb(users, directBusiness) {
   assert.strictEqual(partialHistory.details.directBusinessUsd, 10, 'income history exposes direct business');
   assert.strictEqual(partialHistory.details.dailyB1Percent, 2, 'income history exposes B1 percent');
 
+  const derivedDate = '2026-06-29';
+  assert.strictEqual(dailyB1Percent(derivedDate), 3, 'reported fixture date should use 3% B1');
+  const sponsor = { id: 'usr_derived_sponsor', name: 'Derived Sponsor', email: 'derived-sponsor@example.com', role: 'user', status: 'active', createdAt };
+  const hb9Direct = { id: 'usr_direct_hb9', name: 'HB9 Direct', email: 'direct-hb9@example.com', role: 'user', status: 'active', sponsorId: sponsor.id, createdAt };
+  const bnbDirect = { id: 'usr_direct_bnb', name: 'BNB Direct', email: 'direct-bnb@example.com', role: 'user', status: 'active', sponsorId: sponsor.id, createdAt };
+  const adminDirect = { id: 'usr_direct_admin', name: 'Admin Direct', email: 'direct-admin@example.com', role: 'user', status: 'active', sponsorId: sponsor.id, createdAt };
+  const derivedDb = baseDb([sponsor, hb9Direct, bnbDirect, adminDirect], []);
+  derivedDb.stakes = [
+    { id: 'stk_derived_sponsor', userId: sponsor.id, amount: 21, usdValueAtStake: 21, stakeUsdValue: 21, stakeAsset: 'HB9', stakeAmount: 9.33, coinAmount: 9.33, hb9EquivalentAmount: 9.33, status: 'active', startDate: '2026-06-20', createdAt },
+    { id: 'stk_direct_hb9', userId: hb9Direct.id, amount: 20, usdValueAtStake: 20, stakeUsdValue: 20, stakeAsset: 'HB9', stakeAmount: 8.89, coinAmount: 8.89, hb9EquivalentAmount: 8.89, status: 'active', startDate: derivedDate, createdAt: `${derivedDate}T10:00:00.000Z` },
+    { id: 'stk_direct_bnb', userId: bnbDirect.id, amount: 30, usdValueAtStake: 30, stakeUsdValue: 30, stakeAsset: 'BNB', stakeAmount: 0.05, bnbPriceAtStake: 600, hb9EquivalentAmount: 13.33, status: 'active', startDate: derivedDate, createdAt: `${derivedDate}T11:00:00.000Z` },
+    { id: 'stk_direct_admin', userId: adminDirect.id, amount: 10, usdValueAtStake: 10, stakeUsdValue: 10, stakeAsset: 'HB9', stakeAmount: 4.44, coinAmount: 4.44, hb9EquivalentAmount: 4.44, source: 'ADMIN_FUND_TRANSFER', status: 'active', startDate: derivedDate, createdAt: `${derivedDate}T12:00:00.000Z` }
+  ];
+  await runRoiDaily(derivedDb, { fromDate: derivedDate, toDate: derivedDate, now: new Date(`${derivedDate}T18:00:00.000Z`), backfill: true });
+  const derivedRow = derivedDb.incomeLedger.find(row => row.userId === sponsor.id && row.date === derivedDate);
+  const derivedCalculation = calculateB1IncomeForStake({ db: derivedDb, userId: sponsor.id, stakeId: 'stk_derived_sponsor', date: derivedDate, hb9PriceOverride: 2.25, cutoffDateTime: new Date(`${derivedDate}T18:00:00.000Z`) });
+  assert.strictEqual(getUserDirectBusinessUsd(derivedDb, sponsor.id, new Date(`${derivedDate}T18:00:00.000Z`)), 60, 'shared direct business source counts direct stakes before cutoff');
+  assert.strictEqual(derivedCalculation.paidB1Usd, derivedRow.paidB1Usd, 'scheduler B1 row uses centralized calculator output');
+  assert.strictEqual(derivedRow.directBusinessUsd, 60, 'B1 direct business derives all direct active stakes even without referral income rows');
+  assert.strictEqual(derivedRow.qualifiedStakeUsd, 21, 'derived direct business qualifies stake using directBusiness / 2 capped at active stake');
+  assert.strictEqual(derivedRow.paidB1Usd, 0.63, 'qualified stake with positive percent creates positive paid B1');
+  assert.strictEqual(derivedRow.flushedB1Usd, 0, 'full qualification removes B1 flush');
+  assert(derivedDb.auditLogs.some(row => row.type === 'B1_CALCULATION_TRACE' && row.details.userId === sponsor.id && row.details.directBusinessUsd === 60), 'B1 calculation trace is logged');
+
+  const insufficientReserveUser = { id: 'usr_insufficient_reserve', name: 'Reserve User', email: 'reserve@example.com', role: 'user', status: 'active', createdAt };
+  const insufficientDb = baseDb([insufficientReserveUser], [{ id: 'biz_reserve', userId: insufficientReserveUser.id, sourceUserId: 'src_reserve', amount: 10, createdAt }]);
+  insufficientDb.reserve_wallets.find(item => item.asset === 'HB9' && item.walletType === 'income').balance = 0;
+  await runRoiDaily(insufficientDb, { fromDate: date, toDate: date, backfill: true });
+  const reserveRow = insufficientDb.incomeLedger.find(row => row.userId === insufficientReserveUser.id);
+  assert(reserveRow.qualifiedStakeUsd > 0, 'reserve fallback fixture has qualified stake');
+  assert(reserveRow.paidB1Usd > 0, 'qualified stake still stores paid B1 when reserve debit is unavailable');
+  assert(reserveRow.paidB1Hb9 > 0, 'qualified stake still credits HB9 when reserve debit is unavailable');
+  assert.notStrictEqual(reserveRow.status, 'queued', 'reserve fallback must not zero paid B1 into queued status');
+
   const repairUser = { id: 'usr_repair_wrong_flush', name: 'Repair', email: 'repair-b1@example.com', role: 'user', status: 'active', createdAt };
   const repairDb = baseDb([repairUser], [{ id: 'biz_repair', userId: repairUser.id, sourceUserId: 'src_repair', amount: 10, createdAt }]);
-  const context = incomeContext(repairDb, repairUser.id, date, 2.25);
-  repairDb.flushRecords.push({ id: 'fls_wrong', userId: repairUser.id, date, incomeType: 'B1 / Global Team', eligibleIncome: context.grossB1Usd, paidIncome: 0, flushedIncome: context.grossB1Usd, flushedB1Usd: context.grossB1Usd, burnStatus: 'Burned Forever', createdAt });
-  repairDb.globalTeamRecords.push({ id: 'gbl_wrong', userId: repairUser.id, date, paid: 0, unpaid: context.grossB1Usd, createdAt });
+  const repairCalculation = calculateB1IncomeForStake({ db: repairDb, userId: repairUser.id, stakeId: `stk_${repairUser.id}`, date, hb9PriceOverride: 2.25 });
+  const grossRepairB1Usd = repairCalculation.paidB1Usd + repairCalculation.flushedB1Usd;
+  repairDb.flushRecords.push({ id: 'fls_wrong', userId: repairUser.id, date, incomeType: 'B1 / Global Team', eligibleIncome: grossRepairB1Usd, paidIncome: 0, flushedIncome: grossRepairB1Usd, flushedB1Usd: grossRepairB1Usd, burnStatus: 'Burned Forever', createdAt });
+  repairDb.globalTeamRecords.push({ id: 'gbl_wrong', userId: repairUser.id, date, paid: 0, unpaid: grossRepairB1Usd, createdAt });
   repairDb.incomeLedger.push({ id: 'led_wrong', userId: repairUser.id, date, type: 'B1_INCOME', amount: 0, hb9Amount: 0, status: 'flushed', createdAt });
 
   const dry = await repairWrongFlushedB1({ date, dryRun: true, db: repairDb });
-  assert.strictEqual(dry.createdRows, 1, 'dry run identifies corrected partial paid B1 row');
+  assert.strictEqual(dry.createdRows + dry.updatedRows, 1, 'dry run identifies corrected partial paid B1 row');
   assert.strictEqual(repairDb.incomeLedger.length, 1, 'dry run does not create rows');
   const real = await repairWrongFlushedB1({ date, dryRun: false, db: repairDb });
-  assert.strictEqual(real.createdRows, 1, 'real repair creates corrected partial paid B1 row');
+  assert.strictEqual(real.createdRows + real.updatedRows, 1, 'real repair upserts corrected partial paid B1 row');
+  assert.strictEqual(repairDb.incomeLedger.length, 1, 'real repair updates the wrong row without duplicating B1 rows');
   assert.strictEqual(repairDb.incomeLedger.filter(row => row.type === 'B1_INCOME' && row.amount > 0).length, 1, 'real repair inserts one paid B1 row');
+  const repairedRow = repairDb.incomeLedger.find(row => row.type === 'B1_INCOME' && row.amount > 0);
+  assert.strictEqual(repairedRow.paidB1Usd, repairCalculation.paidB1Usd, 'repair B1 row uses centralized calculator output');
   const duplicate = await repairWrongFlushedB1({ date, dryRun: false, db: repairDb });
-  assert.strictEqual(duplicate.createdRows, 0, 'repair rerun does not duplicate paid B1 row');
+  assert.strictEqual(duplicate.createdRows + duplicate.updatedRows, 0, 'repair rerun does not duplicate paid B1 row');
   assert.strictEqual(repairDb.flushRecords[0].flushedB1Usd, 0.32, 'repair adjusts full flush to correct partial flush amount');
 
   console.log('b1-partial-qualification-smoke ok');

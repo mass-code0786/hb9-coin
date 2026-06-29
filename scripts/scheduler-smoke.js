@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const {
+  dailyB1Percent,
   runGlobalTeamDaily,
   runRoiDaily,
   lastDueDate,
@@ -66,11 +67,13 @@ function request(port, requestPath, { method = 'GET', body = null, token = null 
 function waitForServer(child) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('server did not start')), 12000);
+    let output = '';
     const onData = data => {
       const text = String(data);
+      output += text;
       if (text.includes('HB9 Staking running')) {
         clearTimeout(timer);
-        resolve();
+        resolve(output);
       }
     };
     child.stdout.on('data', onData);
@@ -118,8 +121,35 @@ function waitForServer(child) {
   assert(types.includes('GLOBAL_TEAM_SKIP_DUPLICATE'), 'Global Team duplicate log exists');
   assert(types.includes('ROI_DAILY_START'), 'ROI start log exists');
   assert(types.includes('ROI_DAILY_COMPLETE'), 'ROI complete log exists');
+  assert(types.includes('B1_DAILY_START'), 'B1 start log exists');
+  assert(types.includes('B1_DAILY_COMPLETE'), 'B1 complete log exists');
   assert(types.includes('ROI_BACKFILL'), 'ROI backfill log exists');
   assert(types.includes('ROI_SKIP_DUPLICATE'), 'ROI duplicate log exists');
+
+  const b1State = db();
+  b1State.users.push({ id: 'usr_direct', name: 'Direct', email: 'direct@hb9.local', role: 'user', status: 'active', sponsorId: 'usr_user', createdAt: '2026-06-29T10:00:00.000Z' });
+  b1State.stakes.push(
+    { id: 'stk_sponsor_b1', userId: 'usr_user', stakeAsset: 'HB9', amount: 21, usdValueAtStake: 21, stakeUsdValue: 21, stakeAmount: 9.33, hb9EquivalentAmount: 9.33, status: 'active', startDate: '2026-06-29', createdAt: '2026-06-29T10:00:00.000Z' },
+    { id: 'stk_direct_before_b1', userId: 'usr_direct', stakeAsset: 'HB9', amount: 42, usdValueAtStake: 42, stakeUsdValue: 42, stakeAmount: 18.66, hb9EquivalentAmount: 18.66, status: 'active', startDate: '2026-06-29', createdAt: '2026-06-29T17:59:00.000Z' }
+  );
+  const b1Today = await runRoiDaily(b1State, { now: new Date('2026-06-29T18:00:00.000Z'), fromDate: '2026-06-29', toDate: '2026-06-29' });
+  assert.strictEqual(b1Today.createdDays, 2, 'daily B1 scheduler creates rows automatically without repair');
+  const sponsorB1 = b1State.incomeLedger.find(row => row.userId === 'usr_user' && row.stakeId === 'stk_sponsor_b1' && row.date === '2026-06-29');
+  assert(sponsorB1, 'automatic scheduler creates sponsor B1 row');
+  assert.strictEqual(sponsorB1.totalDirectBusinessUsd, 42, 'direct business before scheduler cutoff is included');
+  assert.strictEqual(sponsorB1.qualifiedStakeUsd, 21, 'direct business fully qualifies sponsor stake');
+  assert(sponsorB1.paidB1Usd > 0, 'automatic scheduler pays B1 when qualified');
+  assert.strictEqual(sponsorB1.dailyB1Percent, dailyB1Percent('2026-06-29'), 'scheduler uses dynamic B1 percent');
+  assert(b1State.auditLogs.some(row => row.type === 'B1_CALCULATION_TRACE' && row.details.stakeId === 'stk_sponsor_b1'), 'automatic scheduler writes B1 trace');
+  const duplicateB1 = await runRoiDaily(b1State, { now: new Date('2026-06-29T18:30:00.000Z'), fromDate: '2026-06-29', toDate: '2026-06-29' });
+  assert.strictEqual(duplicateB1.createdDays, 0, 'rerun same B1 day does not duplicate');
+  assert.strictEqual(b1State.incomeLedger.filter(row => row.userId === 'usr_user' && row.stakeId === 'stk_sponsor_b1' && row.date === '2026-06-29').length, 1, 'same-day B1 row remains unique');
+  const b1Next = await runRoiDaily(b1State, { now: new Date('2026-06-30T18:00:00.000Z'), fromDate: '2026-06-30', toDate: '2026-06-30' });
+  assert.strictEqual(b1Next.createdDays, 2, 'next day creates new automatic B1 rows');
+  const nextSponsorB1 = b1State.incomeLedger.find(row => row.userId === 'usr_user' && row.stakeId === 'stk_sponsor_b1' && row.date === '2026-06-30');
+  assert(nextSponsorB1, 'next-day B1 row exists');
+  assert.strictEqual(nextSponsorB1.dailyB1Percent, dailyB1Percent('2026-06-30'), 'next-day row uses that day dynamic percent');
+  assert.notStrictEqual(nextSponsorB1.incomeKey, sponsorB1.incomeKey, 'next-day B1 row has a distinct duplicate key');
 
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
@@ -148,7 +178,8 @@ function waitForServer(child) {
     stdio: ['ignore', 'pipe', 'pipe']
   });
   try {
-    await waitForServer(child);
+    const startupOutput = await waitForServer(child);
+    assert(startupOutput.includes('B1_SCHEDULER_ACTIVE'), 'startup logs active B1 scheduler');
     const route = await request(childPort, '/admin');
     assert.strictEqual(route.status, 200, 'child /admin route works');
     const adminLogin = await request(childPort, '/api/auth/login', { method: 'POST', body: { email: 'admin-scheduler@hb9.local', password: 'Admin@123456' } });

@@ -1,6 +1,6 @@
 const {
   b1IncomeKey,
-  b1StakeContexts,
+  calculateB1IncomeForStake,
   dataFile,
   hb9PriceSource,
   incomeContext,
@@ -9,6 +9,7 @@ const {
 } = require('../server');
 
 const round = value => Math.round((Number(value || 0) + Number.EPSILON) * 100) / 100;
+const stakeUsd = stake => round(Number(stake?.usdValueAtStake) || Number(stake?.stakeUsdValue) || Number(stake?.amount) || 0);
 const id = prefix => `${prefix}_${cryptoRandom()}`;
 const cryptoRandom = () => require('crypto').randomUUID();
 const yesterday = () => {
@@ -24,8 +25,16 @@ function log(type, details) {
 function hasPaidB1(db, userId, stakeId, date) {
   const key = b1IncomeKey(userId, stakeId, date);
   return (db.incomeLedger || []).some(row =>
-    row.incomeKey === key ||
-    (row.userId === userId && row.stakeId === stakeId && row.date === date && String(row.type || row.incomeType || '').toUpperCase().replace(/\s+/g, '_') === 'B1_INCOME' && Number(row.amount || row.hb9Amount || row.paidB1Hb9 || 0) > 0)
+    (row.incomeKey === key || (row.userId === userId && row.stakeId === stakeId && row.date === date && String(row.type || row.incomeType || '').toUpperCase().replace(/\s+/g, '_') === 'B1_INCOME')) &&
+    Number(row.amount || row.hb9Amount || row.paidB1Hb9 || 0) > 0
+  );
+}
+
+function zeroPaidB1Row(db, userId, stakeId, date) {
+  const key = b1IncomeKey(userId, stakeId, date);
+  return (db.incomeLedger || []).find(row =>
+    (row.incomeKey === key || (row.userId === userId && (!row.stakeId || row.stakeId === stakeId) && row.date === date && String(row.type || row.incomeType || '').toUpperCase().replace(/\s+/g, '_') === 'B1_INCOME')) &&
+    Number(row.amount || row.hb9Amount || row.paidB1Hb9 || 0) <= 0
   );
 }
 
@@ -48,7 +57,7 @@ async function repairWrongFlushedB1({ date = process.env.B1_REPAIR_DATE || proce
   db.globalTeamRecords = db.globalTeamRecords || [];
   db.auditLogs = db.auditLogs || [];
   const price = (await hb9PriceSource(db, { interval: '1d', limit: 1 })).price;
-  const summary = { date, dryRun, inspectedUsers: 0, adjustedFlushRecords: 0, adjustedGlobalRecords: 0, createdRows: 0, skippedDuplicates: 0, skippedNoPaidB1: 0, totalPaidB1Hb9: 0, totalPaidB1Usd: 0 };
+  const summary = { date, dryRun, inspectedUsers: 0, adjustedFlushRecords: 0, adjustedGlobalRecords: 0, updatedRows: 0, createdRows: 0, skippedDuplicates: 0, skippedNoPaidB1: 0, totalPaidB1Hb9: 0, totalPaidB1Usd: 0 };
   log('WRONG_FLUSHED_B1_REPAIR_STARTED', { date, dryRun, dataFile });
 
   for (const user of (db.users || []).filter(item => item.role === 'user' && (!userId || item.id === userId))) {
@@ -63,7 +72,23 @@ async function repairWrongFlushedB1({ date = process.env.B1_REPAIR_DATE || proce
       continue;
     }
 
-    const stakeRows = b1StakeContexts(db, user.id, date, context).filter(row => row.paidB1Usd > 0);
+    const stakeRows = (db.stakes || [])
+      .filter(stake => stake.userId === user.id && stake.status === 'active')
+      .sort((a, b) => String(a.startDate || a.createdAt || a.id).localeCompare(String(b.startDate || b.createdAt || b.id)))
+      .map(stake => {
+        const calculation = calculateB1IncomeForStake({ db, userId: user.id, stakeId: stake.id, date, hb9PriceOverride: price });
+        const stakeValueUsd = stakeUsd(stake);
+        return {
+          stake,
+          incomeKey: b1IncomeKey(user.id, stake.id, date),
+          stakeUsd: stakeValueUsd,
+          stakeQualifiedUsd: calculation.qualifiedStakeUsd,
+          stakeUnqualifiedUsd: calculation.unqualifiedStakeUsd,
+          grossB1Usd: round(stakeValueUsd * calculation.dailyB1Percent / 100),
+          ...calculation
+        };
+      })
+      .filter(row => row.paidB1Usd > 0);
     const createdAt = new Date().toISOString();
     const paidIncome = round(stakeRows.reduce((sum, row) => sum + row.paidB1Usd, 0));
 
@@ -77,7 +102,7 @@ async function repairWrongFlushedB1({ date = process.env.B1_REPAIR_DATE || proce
         Object.assign(existingGlobal, { paid: paidIncome, unpaid: context.flushUsd, paidGlobalTeam: Math.round(paidIncome / 0.02), unpaidGlobalTeam: Math.round(context.flushUsd / 0.02), ...context, repairedAt: createdAt });
         summary.adjustedGlobalRecords++;
       }
-      existingLedger.filter(row => !Number(row.amount || row.hb9Amount || row.paidB1Hb9 || 0)).forEach(row => {
+      existingLedger.filter(row => !Number(row.amount || row.hb9Amount || row.paidB1Hb9 || 0) && row.stakeId && !stakeRows.some(item => item.stake.id === row.stakeId)).forEach(row => {
         row.status = 'superseded';
         row.type = 'B1_INCOME_SUPERSEDED';
         row.supersededBy = 'repair-wrong-flushed-b1';
@@ -91,15 +116,19 @@ async function repairWrongFlushedB1({ date = process.env.B1_REPAIR_DATE || proce
         log('WRONG_FLUSHED_B1_REPAIR_SKIPPED_DUPLICATE', { userId: user.id, stakeId: row.stake.id, date, incomeKey: row.incomeKey });
         continue;
       }
-      const ledgerRow = { id: id('led'), userId: user.id, stakeId: row.stake.id, incomeKey: row.incomeKey, date, type: 'B1_INCOME', asset: 'HB9', amount: row.paidB1Hb9, hb9Amount: row.paidB1Hb9, valueUsd: row.paidB1Usd, status: row.status, note: 'Wrong flushed B1 repair', immutable: true, ...context, stakeUsd: row.stakeUsd, stakeQualifiedUsd: row.stakeQualifiedUsd, stakeUnqualifiedUsd: row.stakeUnqualifiedUsd, grossB1Usd: row.grossB1Usd, paidB1Usd: row.paidB1Usd, flushedB1Usd: row.flushedB1Usd, paidB1Hb9: row.paidB1Hb9, creditedB1Hb9: row.paidB1Hb9, creditedB1Usd: row.paidB1Usd, createdAt };
-      summary.createdRows++;
+      const { stake, ...calculatedRow } = row;
+      const ledgerRow = { id: id('led'), userId: user.id, stakeId: stake.id, incomeKey: row.incomeKey, date, type: 'B1_INCOME', asset: 'HB9', amount: row.paidB1Hb9, hb9Amount: row.paidB1Hb9, valueUsd: row.paidB1Usd, status: row.status, note: 'Wrong flushed B1 repair', immutable: true, ...context, ...calculatedRow, stakeUsd: row.stakeUsd, stakeQualifiedUsd: row.stakeQualifiedUsd, stakeUnqualifiedUsd: row.stakeUnqualifiedUsd, grossB1Usd: row.grossB1Usd, paidB1Usd: row.paidB1Usd, flushedB1Usd: row.flushedB1Usd, paidB1Hb9: row.paidB1Hb9, creditedB1Hb9: row.paidB1Hb9, creditedB1Usd: row.paidB1Usd, createdAt };
+      const existingZero = zeroPaidB1Row(db, user.id, row.stake.id, date);
+      if (existingZero) summary.updatedRows++;
+      else summary.createdRows++;
       summary.totalPaidB1Hb9 = round(summary.totalPaidB1Hb9 + row.paidB1Hb9);
       summary.totalPaidB1Usd = round(summary.totalPaidB1Usd + row.paidB1Usd);
       if (!dryRun) {
         reserveCredit(db, user.id, ledgerRow, createdAt);
-        db.incomeLedger.push(ledgerRow);
+        if (existingZero) Object.assign(existingZero, ledgerRow, { id: existingZero.id, repairedAt: createdAt });
+        else db.incomeLedger.push(ledgerRow);
       }
-      log(dryRun ? 'WRONG_FLUSHED_B1_REPAIR_WOULD_CREATE' : 'WRONG_FLUSHED_B1_REPAIR_CREATED', { userId: user.id, stakeId: row.stake.id, date, incomeKey: row.incomeKey, paidB1Usd: row.paidB1Usd, paidB1Hb9: row.paidB1Hb9 });
+      log(dryRun ? 'WRONG_FLUSHED_B1_REPAIR_WOULD_UPSERT' : (existingZero ? 'WRONG_FLUSHED_B1_REPAIR_UPDATED' : 'WRONG_FLUSHED_B1_REPAIR_CREATED'), { userId: user.id, stakeId: row.stake.id, date, incomeKey: row.incomeKey, paidB1Usd: row.paidB1Usd, paidB1Hb9: row.paidB1Hb9 });
     }
   }
 
