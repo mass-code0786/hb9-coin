@@ -286,6 +286,80 @@ body:has(.auth-premium){
     max-width:min(300px,calc(100vw - 24px))!important;
   }
 }
+.auth-premium[data-auth-mode="success"] .auth-card{
+  width:min(520px,calc(100vw - 28px))!important;
+  max-width:min(520px,calc(100vw - 28px))!important;
+  padding:34px!important;
+}
+.auth-success{
+  display:grid!important;
+  justify-items:center!important;
+  align-content:center!important;
+  gap:18px!important;
+  min-height:420px!important;
+  text-align:center!important;
+}
+.auth-success-icon{
+  display:grid!important;
+  place-items:center!important;
+  width:104px!important;
+  height:104px!important;
+  border-radius:50%!important;
+  color:#fff!important;
+  font-size:56px!important;
+  font-weight:900!important;
+  line-height:1!important;
+  background:linear-gradient(135deg,#22c55e 0%,#8b5cf6 62%,#a855f7 100%)!important;
+  border:1px solid rgba(255,255,255,.32)!important;
+  box-shadow:0 18px 42px rgba(34,197,94,.24),0 0 36px rgba(139,92,246,.32)!important;
+}
+.auth-success-copy{
+  display:grid!important;
+  gap:10px!important;
+}
+.auth-success-lead{
+  margin:0!important;
+  color:#f5efff!important;
+  font-size:17px!important;
+  font-weight:800!important;
+  line-height:1.45!important;
+}
+.auth-success-text{
+  max-width:420px!important;
+  margin:0 auto!important;
+  color:#cdbcf0!important;
+  font-size:14px!important;
+  line-height:1.7!important;
+}
+.auth-success-signin{
+  width:min(260px,100%)!important;
+  margin-top:4px!important;
+}
+@media(max-width:430px){
+  .auth-premium[data-auth-mode="success"]{
+    align-items:center!important;
+  }
+  .auth-premium[data-auth-mode="success"] .auth-card{
+    width:calc(100vw - 24px)!important;
+    max-width:calc(100vw - 24px)!important;
+    padding:24px 18px!important;
+  }
+  .auth-success{
+    min-height:calc(100vh - 96px)!important;
+    gap:16px!important;
+  }
+  .auth-success-icon{
+    width:86px!important;
+    height:86px!important;
+    font-size:46px!important;
+  }
+  .auth-success-lead{
+    font-size:15px!important;
+  }
+  .auth-success-text{
+    font-size:13px!important;
+  }
+}
 
 html,body{
   max-width:100%;
