@@ -5,6 +5,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
 const mobileCss = fs.readFileSync(path.join(root, 'public', 'mobile-defi-dashboard.css'), 'utf8');
+const incomeStackCss = fs.readFileSync(path.join(root, 'public', 'income-stack.css'), 'utf8');
 
 const expectedDashboardContent = [
   'Total Deposit',
@@ -34,6 +35,23 @@ const expectedDashboardContent = [
 for (const label of expectedDashboardContent) {
   assert(app.includes(label), `dashboard source must render ${label}`);
 }
+
+const compactIncomeStart = app.indexOf('const hb9IncomeAmount=');
+const compactIncomeEnd = app.indexOf('function applyMobileDefiDashboard', compactIncomeStart);
+assert(compactIncomeStart >= 0 && compactIncomeEnd > compactIncomeStart, 'compact income summary should define HB9 icon amount formatter');
+const compactIncome = app.slice(compactIncomeStart, compactIncomeEnd);
+for (const label of ['Referral Income', 'Level Income', 'B1 Income', 'Salary Income']) {
+  assert(
+    new RegExp(`card\\('[^']+','${label}'[\\s\\S]*?hb9IncomeAmount\\(`).test(compactIncome),
+    `${label} should render number values with the HB9 icon formatter`
+  );
+}
+assert(/card\('global','Global Team'[\s\S]*?globalTeam\(i\.paidGlobal\)[\s\S]*?globalTeam\(i\.unpaidGlobal\)/.test(compactIncome), 'Global Team should remain number only');
+assert(!/card\('global','Global Team'[\s\S]*?hb9IncomeAmount/.test(compactIncome), 'Global Team should not render an HB9 icon');
+assert(/card\('flush-pair','Flush Income'[\s\S]*?money\(i\.todayFlush\)[\s\S]*?money\(i\.totalFlush\)/.test(compactIncome), 'Flush Income should remain USD');
+assert(!/card\('flush-pair','Flush Income'[\s\S]*?hb9IncomeAmount/.test(compactIncome), 'Flush Income should not render an HB9 icon');
+assert(!/todayReferral\)} HB9|todayLevelIncome\)} HB9|todayB1\)} HB9|todaySalary\)} HB9/.test(compactIncome), 'compact income values should not append HB9 text');
+assert(app.includes("HB9CoinLogo('hb9-coin-logo hb9-coin-logo--income')"), 'HB9 income rows should render the small coin icon');
 
 assert(!app.includes('const supplyDashboardPage=pages.Dashboard'), 'user dashboard must not wrap Dashboard to inject HB9 Supply');
 assert(!/pages\.Dashboard=function\(\)\{[^}]*HB9 Supply/.test(app), 'user dashboard must not render an HB9 Supply section');
@@ -72,5 +90,11 @@ assert(
   /@media\(max-width:390px\)[\s\S]*?\.defi-dashboard-page>\.grid\.stats,[\s\S]*?\.defi-dashboard-active \.incomegrid,[\s\S]*?\.defi-dashboard-active \.progress-grid\s*\{[\s\S]*?grid-template-columns:\s*1fr\s*!important/.test(mobileCss),
   'narrow mobile dashboard must stack stats, income, and progress cards without overflow'
 );
+
+assert(/\.defi-dashboard-active \.income-pair\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,1fr\) auto\s*!important/.test(mobileCss), 'mobile income cards should keep label and amount in non-overlapping grid columns');
+assert(/\.defi-dashboard-active \.income-pair strong\s*\{[\s\S]*?font-size:\s*15px\s*!important/.test(mobileCss), 'mobile income values should use reduced font size');
+assert(/@media\(max-width:390px\)[\s\S]*?\.defi-dashboard-active \.income-pair strong\{font-size:14px!important\}/.test(mobileCss), 'narrow mobile income values should shrink further');
+assert(mobileCss.includes('.defi-dashboard-active .hb9-coin-logo--income'), 'mobile income cards should size the HB9 icon');
+assert(incomeStackCss.includes('.hb9-income-amount'), 'desktop income cards should align HB9 number and icon cleanly');
 
 console.log('dashboard-responsive-smoke ok');

@@ -186,7 +186,7 @@
   .defi-dashboard-active .income-pair{
     position:relative!important;
     display:grid!important;
-    grid-template-columns:auto minmax(0,1fr)!important;
+    grid-template-columns:minmax(0,1fr) auto!important;
     align-items:center!important;
     gap:12px!important;
     min-height:86px!important;
@@ -221,15 +221,18 @@
     pointer-events:none!important;
   }
   .defi-dashboard-active .income-pair label{
+    min-width:0!important;
     color:#FFFFFF!important;
     font-size:14px!important;
     font-weight:900!important;
     line-height:1.15!important;
+    overflow-wrap:anywhere!important;
   }
   .defi-dashboard-active .income-pair-details{
     justify-self:end!important;
     align-items:flex-end!important;
-    max-width:170px!important;
+    max-width:150px!important;
+    min-width:0!important;
   }
   .defi-dashboard-active .income-pair small{
     color:#BCA8D8!important;
@@ -237,9 +240,23 @@
   }
   .defi-dashboard-active .income-pair strong{
     color:#FFFFFF!important;
-    font-size:18px!important;
+    max-width:100%!important;
+    font-size:15px!important;
     line-height:1.15!important;
     white-space:nowrap!important;
+  }
+  .defi-dashboard-active .hb9-income-amount{
+    display:inline-flex!important;
+    align-items:center!important;
+    justify-content:flex-end!important;
+    gap:5px!important;
+    max-width:100%!important;
+    white-space:nowrap!important;
+  }
+  .defi-dashboard-active .hb9-coin-logo--income{
+    width:16px!important;
+    height:16px!important;
+    flex:0 0 16px!important;
   }
   .defi-dashboard-active .income-pair em{
     color:#8D78AA!important;
@@ -385,8 +402,9 @@
 @media(max-width:390px){
   .defi-dashboard-active .content{padding-left:12px!important;padding-right:12px!important}
   .defi-dashboard-active .income-pair{padding-right:12px!important}
-  .defi-dashboard-active .income-pair-details{max-width:154px!important}
-  .defi-dashboard-active .income-pair strong{font-size:17px!important}
+  .defi-dashboard-active .income-pair-details{max-width:138px!important}
+  .defi-dashboard-active .income-pair strong{font-size:14px!important}
+  .defi-dashboard-active .hb9-coin-logo--income{width:14px!important;height:14px!important;flex-basis:14px!important}
   .defi-dashboard-page .defi-volume-grid strong{font-size:18px!important}
   .defi-dashboard-page>.grid.stats,
   .defi-dashboard-active .incomegrid,
