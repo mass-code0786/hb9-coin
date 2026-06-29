@@ -467,6 +467,26 @@ function payLevelIncome(db,sourceUser,stake,payoutPrice){
     receiverId=receiver.sponsorId;
   }
 }
+function distributeStakeIncome(db,user,stake,payoutPrice,isFirstStake){
+  if(!stake||!user)return;
+  db.referralLedger=db.referralLedger||[];
+  db.income_emissions=db.income_emissions||[];
+  db.directBusiness=db.directBusiness||[];
+  const stakeUsd=Number(stake.usdValueAtStake)||Number(stake.amount)||0;
+  if(user.sponsorId){
+    if(!db.referralLedger.some(x=>x.stakeId===stake.id&&x.type==='REFERRAL_INCOME')){
+      const referralPercent=setting(db,'referralPercent'),referralUsdAmount=roundCurrency(stakeUsd*referralPercent/100),referralHb9Amount=payoutPrice>0?roundCurrency(referralUsdAmount/payoutPrice):0,refId=id('ref'),createdAt=new Date().toISOString();
+      let status='credited',creditedHb9=referralHb9Amount,note='Referral income credited';
+      try{reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:referralHb9Amount,reason:'Referral income emission',userId:user.sponsorId,refId});walletEntry(db,{userId:user.sponsorId,asset:'HB9',direction:'credit',amount:referralHb9Amount,reason:'Referral income credited',refId});}catch(error){status='queued';creditedHb9=0;note='HB9 income reserve insufficient';}
+      db.referralLedger.push({id:refId,type:'REFERRAL_INCOME',asset:'HB9',sponsorId:user.sponsorId,referredUserId:user.id,stakeId:stake.id,stakeAsset:stake.stakeAsset||'HB9',stakeAmount:stakeUsd,stakeCoinAmount:Number(stake.hb9EquivalentAmount)||Number(stake.coinAmount)||0,referralPercent,referralAmount:creditedHb9,referralHb9Amount:creditedHb9,queuedHb9Amount:status==='queued'?referralHb9Amount:0,referralUsdAmount,hb9PriceAtCredit:payoutPrice,hb9PriceAtPayout:payoutPrice,status,note,date:today(),createdAt,immutable:true});
+      db.income_emissions.push({id:id('iem'),userId:user.sponsorId,type:'REFERRAL_INCOME',asset:'HB9',amount:referralHb9Amount,valueUsd:referralUsdAmount,status,reason:note,createdAt,immutable:true});
+    }
+    if(!db.directBusiness.some(x=>x.userId===user.sponsorId&&x.sourceUserId===user.id&&x.stakeId===stake.id)){
+      db.directBusiness.push({id:id('biz'),userId:user.sponsorId,sourceUserId:user.id,stakeId:stake.id,amount:roundCurrency(stakeUsd),reason:'Direct referral stake business',createdAt:new Date().toISOString(),immutable:true});
+    }
+  }
+  if(isFirstStake)payLevelIncome(db,user,stake,payoutPrice);
+}
 function walletBalances(db,userId) {
   const deposits=db.deposits.filter(x=>x.userId===userId&&(x.status==='approved'||x.status==='credited')).reduce((n,x)=>n+x.amount,0);
   const adminUsdt=(db.wallet_ledger||[]).filter(x=>x.userId===userId&&x.asset==='USDT'&&x.type==='ADMIN_FUND_TRANSFER').reduce((n,x)=>n+(x.direction==='credit'?1:-1)*(Number(x.amount)||0),0);
@@ -934,15 +954,7 @@ async function createStake(db,user,{amount,stakeAsset='HB9',clientRequestId=null
   const isFirstStake=!db.stakes.some(s=>s.userId===user.id), createdAt=new Date().toISOString(), stake={id:id('stk'),userId:user.id,clientRequestId:clientRequestId?String(clientRequestId):null,stakeAsset:normalized,stakeAmount,stakeUsdValue:usdAmount,amount:usdAmount,usdValueAtStake:usdAmount,hb9EquivalentAmount,coinAmount:hb9EquivalentAmount,hb9Amount:hb9EquivalentAmount,hb9PriceAtStake:hb9Price,bnbPriceAtStake,status:'active',startDate:today(),dailyRate:db.settings.dailyRoi/100,createdAt};
   db.stakes.push(stake);
   walletEntry(db,{userId:user.id,asset:normalized,direction:'lock',amount:stakeAmount,reason:`${normalized} stake`,refId:stake.id});
-  if(user.sponsorId){
-    const referralPercent=setting(db,'referralPercent'),referralUsdAmount=roundCurrency(usdAmount*referralPercent/100),referralHb9Amount=payoutPrice>0?roundCurrency(referralUsdAmount/payoutPrice):0,refId=id('ref');
-    let status='credited',creditedHb9=referralHb9Amount,note='Referral income credited';
-    try{reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:referralHb9Amount,reason:'Referral income emission',userId:user.sponsorId,refId});walletEntry(db,{userId:user.sponsorId,asset:'HB9',direction:'credit',amount:referralHb9Amount,reason:'Referral income credited',refId});}catch(error){status='queued';creditedHb9=0;note='HB9 income reserve insufficient';}
-    db.referralLedger=db.referralLedger||[];db.income_emissions=db.income_emissions||[];
-    db.referralLedger.push({id:refId,type:'REFERRAL_INCOME',asset:'HB9',sponsorId:user.sponsorId,referredUserId:user.id,stakeId:stake.id,stakeAsset:normalized,stakeAmount:usdAmount,stakeCoinAmount:hb9EquivalentAmount,referralPercent,referralAmount:creditedHb9,referralHb9Amount:creditedHb9,queuedHb9Amount:status==='queued'?referralHb9Amount:0,referralUsdAmount,hb9PriceAtCredit:payoutPrice,hb9PriceAtPayout:payoutPrice,status,note,date:today(),createdAt,immutable:true});
-    db.income_emissions.push({id:id('iem'),userId:user.sponsorId,type:'REFERRAL_INCOME',asset:'HB9',amount:referralHb9Amount,valueUsd:referralUsdAmount,status,reason:note,createdAt,immutable:true});
-  }
-  if(isFirstStake)payLevelIncome(db,user,stake,payoutPrice);
+  distributeStakeIncome(db,user,stake,payoutPrice,isFirstStake);
   return stake;
 }
 function depositAddressLookupDiagnostics(db,{chain,toAddress,txHash,logIndex,amount}){
