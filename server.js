@@ -424,13 +424,30 @@ function stakeInvestmentSummary(db,userId){
   const latest=active.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||stakes.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||null;
   return {stakes,active,totalInvestmentUsd:sumUsd(stakes),activeStake:sumUsd(active),totalStakeHb9Equivalent:sumHb9(stakes),hb9EquivalentAmount:sumHb9(active),totalStakeAmount:roundCurrency(stakes.reduce((sum,stake)=>sum+(Number(stake.stakeAmount)||Number(stake.coinAmount)||Number(stake.hb9Amount)||0),0)),stakeAsset:latest?.stakeAsset||null,lastStakeDate:latest?String(latest.startDate||latest.stakeDate||latest.createdAt||'').slice(0,10):null,stakeCount:stakes.length,activeStakeCount:active.length};
 }
+function normalizedIncomeLedgerType(record){
+  return String(record?.type||record?.incomeType||record?.income_type||record?.kind||'').trim().toUpperCase().replace(/[\s-]+/g,'_');
+}
+function isB1IncomeLedgerEntry(record){
+  const type=normalizedIncomeLedgerType(record);
+  return type==='B1_INCOME'||type==='B1'||type==='B1INCOME';
+}
+function isCreditedIncomeLedgerEntry(record){
+  const status=String(record?.status||'credited').trim().toLowerCase();
+  return ['credited','credit','repaired'].includes(status);
+}
+function b1IncomeLedgerAmount(record){
+  return roundCurrency(Number(record?.hb9Amount)||Number(record?.creditedB1Hb9)||Number(record?.amount)||Number(record?.creditAmount)||0);
+}
+function incomeLedgerDate(record){
+  return String(record?.date||record?.incomeDate||record?.createdAt||'').slice(0,10);
+}
 function userIncomeSummary(db,userId){
   const date=today();
   const referral=(db.referralLedger||[]).filter(x=>x.sponsorId===userId&&(!x.status||x.status==='credited'));
   const level=(db.level_income_ledger||[]).filter(x=>x.receiverUserId===userId&&x.status==='credited');
-  const b1=(db.incomeLedger||[]).filter(x=>x.userId===userId&&x.type==='B1_INCOME'&&x.status==='credited');
+  const b1=(db.incomeLedger||[]).filter(x=>x.userId===userId&&isB1IncomeLedgerEntry(x)&&isCreditedIncomeLedgerEntry(x));
   const salary=(db.salary_payouts||[]).filter(x=>x.userId===userId&&x.status==='credited');
-  const amount=x=>Number(x.referralHb9Amount)||Number(x.referralAmount)||Number(x.hb9Amount)||Number(x.amount)||0;
+  const amount=x=>isB1IncomeLedgerEntry(x)?b1IncomeLedgerAmount(x):Number(x.referralHb9Amount)||Number(x.referralAmount)||Number(x.hb9Amount)||Number(x.amount)||0;
   const isToday=x=>String(x.date||x.createdAt||'').slice(0,10)===date;
   const all=[...referral,...level,...b1,...salary];
   return {todayIncome:roundCurrency(all.filter(isToday).reduce((sum,x)=>sum+amount(x),0)),totalIncome:roundCurrency(all.reduce((sum,x)=>sum+amount(x),0))};
@@ -440,7 +457,7 @@ function incomeHistory(db,userId){
   const entries=[];
   (db.referralLedger||[]).filter(x=>x.sponsorId===userId).forEach(x=>entries.push({id:x.id,type:'referral',incomeType:'Referral Income',date:String(x.date||x.createdAt||'').slice(0,10),amount:roundCurrency(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),asset:'HB9',sourceDescription:`Direct referral: ${userName(x.referredUserId)}`,status:x.status||'credited',createdAt:x.createdAt||x.date||''}));
   (db.level_income_ledger||[]).filter(x=>x.receiverUserId===userId).forEach(x=>entries.push({id:x.id,type:'level',incomeType:'Level Income',date:String(x.date||x.createdAt||'').slice(0,10),amount:roundCurrency(Number(x.hb9Amount)||0),asset:'HB9',sourceDescription:`Level ${x.level} from ${userName(x.sourceUserId)}`,status:x.status||'credited',createdAt:x.createdAt||x.date||''}));
-  (db.incomeLedger||[]).filter(x=>x.userId===userId&&x.type==='B1_INCOME').forEach(x=>entries.push({id:x.id,type:'b1',incomeType:'B1 Income',date:String(x.date||x.createdAt||'').slice(0,10),amount:roundCurrency(Number(x.hb9Amount)||Number(x.amount)||0),asset:'HB9',sourceDescription:x.reason||x.note||'Daily B1 income',status:x.status||'credited',createdAt:x.createdAt||x.date||''}));
+  (db.incomeLedger||[]).filter(x=>x.userId===userId&&isB1IncomeLedgerEntry(x)).forEach(x=>entries.push({id:x.id,type:'b1',incomeType:'B1 Income',date:incomeLedgerDate(x),amount:b1IncomeLedgerAmount(x),asset:'HB9',sourceDescription:x.reason||x.note||'Daily B1 income',status:x.status||'credited',createdAt:x.createdAt||x.date||''}));
   (db.salary_payouts||[]).filter(x=>x.userId===userId).forEach(x=>entries.push({id:x.id,type:'salary',incomeType:'Salary Income',date:String(x.cycleStart||x.createdAt||'').slice(0,10),amount:roundCurrency(Number(x.hb9Amount)||0),asset:'HB9',sourceDescription:x.rankName?`${x.rankName} salary cycle`:x.reason||'Salary payout',status:x.status||'credited',createdAt:x.createdAt||x.cycleStart||''}));
   (db.flushRecords||[]).filter(x=>x.userId===userId).forEach(x=>entries.push({id:x.id,type:'flush',incomeType:'Flush Income',date:String(x.date||x.createdAt||'').slice(0,10),amount:roundCurrency(Number(x.totalFlushUsd)||Number(x.flushUsd)||Number(x.flushedIncome)||0),asset:'USD',sourceDescription:x.incomeType||x.reason||'Burned income',status:x.burnStatus||x.status||'Burned Forever',createdAt:x.createdAt||x.date||''}));
   return entries.sort((a,b)=>String(b.createdAt||b.date||'').localeCompare(String(a.createdAt||a.date||'')));
@@ -578,7 +595,7 @@ function walletBalances(db,userId) {
   const stakedHb9=db.stakes.filter(x=>x.userId===userId&&(x.stakeAsset||'HB9')==='HB9').reduce((n,x)=>n+(Number(x.stakeAmount)||Number(x.coinAmount)||0),0);
   const stakedBnb=db.stakes.filter(x=>x.userId===userId&&x.stakeAsset==='BNB').reduce((n,x)=>n+(Number(x.stakeAmount)||0),0);
   const withdrawals=(db.withdrawals||[]).filter(x=>x.userId===userId&&x.status!=='rejected').reduce((n,x)=>n+x.amount,0);
-  const b1Hb9=(db.incomeLedger||[]).filter(x=>x.userId===userId&&x.type==='B1_INCOME'&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount) || Number(x.amount) || 0),0);
+  const b1Hb9=(db.incomeLedger||[]).filter(x=>x.userId===userId&&isB1IncomeLedgerEntry(x)&&isCreditedIncomeLedgerEntry(x)).reduce((n,x)=>n+b1IncomeLedgerAmount(x),0);
   const referralHb9=(db.referralLedger||[]).filter(x=>x.sponsorId===userId&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount) || Number(x.referralAmount) || 0),0);
   const levelHb9=levelIncomeTotal(db,userId);
   const salaryHb9=(db.salary_payouts||[]).filter(x=>x.userId===userId&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0);
@@ -1470,7 +1487,7 @@ function directReferralInvestmentSummary(db,member){
 }
 function dashboard(db,u) {
   const stake=activeStakes(db,u.id).reduce((n,s)=>n+s.amount,0), completed=business(db,u.id), required=stake*setting(db,'directMultiplier');
-  const globals=db.globalTeamRecords.filter(x=>x.userId===u.id), flushes=db.flushRecords.filter(x=>x.userId===u.id), b1=db.incomeLedger.filter(x=>x.userId===u.id&&x.type==='B1_INCOME'&&x.status==='credited');
+  const globals=db.globalTeamRecords.filter(x=>x.userId===u.id), flushes=db.flushRecords.filter(x=>x.userId===u.id), b1=db.incomeLedger.filter(x=>x.userId===u.id&&isB1IncomeLedgerEntry(x)&&isCreditedIncomeLedgerEntry(x));
   const referrals=(db.referralLedger||[]).filter(x=>x.sponsorId===u.id), levelIncome=(db.level_income_ledger||[]).filter(x=>x.receiverUserId===u.id);
   const creditedLevelIncome=levelIncome.filter(x=>x.status==='credited'), direct=db.users.filter(x=>x.sponsorId===u.id);
   const qualifiedDirects=qualifiedDirectReferralCount(db,u.id), levelUnlocked=unlockedLevel(db,u.id);
@@ -1480,7 +1497,7 @@ function dashboard(db,u) {
   const paidGlobalValue=roundCurrency(globals.reduce((n,x)=>n+(Number(x.paid)||0),0)), unpaidGlobalValue=roundCurrency(globals.reduce((n,x)=>n+(Number(x.unpaid)||0),0));
   const paidGlobal=globalTeamUnits(paidGlobalValue), unpaidGlobal=globalTeamUnits(unpaidGlobalValue);
   const team=direct.map(member=>directReferralInvestmentSummary(db,member));console.log('DIRECT_REFERRAL_INVESTMENT_SUMMARY',{userId:u.id,directCount:team.length,members:team.map(x=>({id:x.id,name:x.name,email:x.email,status:x.status,totalStakeUsd:x.totalStakeUsd,activeStakeUsd:x.activeStakeUsd,stakeAsset:x.stakeAsset,hb9EquivalentAmount:x.hb9EquivalentAmount,directBusinessVolume:x.directBusinessVolume}))});
-  return {user:safeUser(u),settings:{...db.settings,market:marketSettings(db)},depositService:depositServiceStatus(),sweepService:sweepServiceStatus(),wallets:{...balances,withdrawal:balances.withdrawableUsdt},supply:solvencyReport(db),stats:{totalStake:allStakes.reduce((n,s)=>n+s.amount,0),activeStake:stake,totalStakeHb9:allStakes.reduce((n,s)=>n+(Number(s.hb9EquivalentAmount)||Number(s.coinAmount)||0),0),activeStakeHb9:activeStakeHb9(db,u.id),totalDeposit:balances.totalDeposit,totalWithdrawal:withdrawals.filter(x=>x.status!=='rejected').reduce((n,x)=>n+x.amount,0),directTeam:direct.length,qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,directBusiness:completed,requiredBusiness:required,remainingBusiness:Math.max(0,required-completed),currentGlobalTeam:globalPoints.currentGlobalTeam,globalPoints:globalPoints.globalPoints,lastGlobalPointUpdate:globalPoints.lastGlobalPointUpdate},globalPoints,income:{todayReferral:referrals.filter(x=>x.date===today()&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),totalReferral:referrals.filter(x=>!x.status||x.status==='credited').reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),todayLevelIncome:creditedLevelIncome.filter(x=>String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalLevelIncome:creditedLevelIncome.reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todaySalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited'&&String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalSalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todayB1:b1.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),totalB1:b1.reduce((n,x)=>n+(Number(x.hb9Amount)||Number(x.amount)||0),0),paidGlobal,unpaidGlobal,paidGlobalValue,unpaidGlobalValue,todayFlush:flushes.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),totalFlush:flushes.reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),eligible:stake>0&&completed>=required},incomeHistory:incomeHistory(db,u.id),salary,levelUnlock:{qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,requiredStakeUsd:LEVEL_DIRECT_MIN_STAKE_USD,maxLevel:LEVEL_INCOME_PERCENTS.length},b1Records:b1.map(x=>({date:x.date,fromUser:u.name,amount:Number(x.hb9Amount)||Number(x.amount)||0,valueUsd:x.valueUsd,status:x.status})),levelIncomeRecords:levelIncome,deposits,conversions,stakes:allStakes,team,referrals,globals,flushes,withdrawals};
+  return {user:safeUser(u),settings:{...db.settings,market:marketSettings(db)},depositService:depositServiceStatus(),sweepService:sweepServiceStatus(),wallets:{...balances,withdrawal:balances.withdrawableUsdt},supply:solvencyReport(db),stats:{totalStake:allStakes.reduce((n,s)=>n+s.amount,0),activeStake:stake,totalStakeHb9:allStakes.reduce((n,s)=>n+(Number(s.hb9EquivalentAmount)||Number(s.coinAmount)||0),0),activeStakeHb9:activeStakeHb9(db,u.id),totalDeposit:balances.totalDeposit,totalWithdrawal:withdrawals.filter(x=>x.status!=='rejected').reduce((n,x)=>n+x.amount,0),directTeam:direct.length,qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,directBusiness:completed,requiredBusiness:required,remainingBusiness:Math.max(0,required-completed),currentGlobalTeam:globalPoints.currentGlobalTeam,globalPoints:globalPoints.globalPoints,lastGlobalPointUpdate:globalPoints.lastGlobalPointUpdate},globalPoints,income:{todayReferral:referrals.filter(x=>x.date===today()&&(!x.status||x.status==='credited')).reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),totalReferral:referrals.filter(x=>!x.status||x.status==='credited').reduce((n,x)=>n+(Number(x.referralHb9Amount)||Number(x.referralAmount)||0),0),todayLevelIncome:creditedLevelIncome.filter(x=>String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalLevelIncome:creditedLevelIncome.reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todaySalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited'&&String(x.createdAt||'').slice(0,10)===today()).reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),totalSalary:(db.salary_payouts||[]).filter(x=>x.userId===u.id&&x.status==='credited').reduce((n,x)=>n+(Number(x.hb9Amount)||0),0),todayB1:b1.filter(x=>incomeLedgerDate(x)===today()).reduce((n,x)=>n+b1IncomeLedgerAmount(x),0),totalB1:b1.reduce((n,x)=>n+b1IncomeLedgerAmount(x),0),paidGlobal,unpaidGlobal,paidGlobalValue,unpaidGlobalValue,todayFlush:flushes.filter(x=>x.date===today()).reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),totalFlush:flushes.reduce((n,x)=>n+(Number(x.flushedIncome)||0),0),eligible:stake>0&&completed>=required},incomeHistory:incomeHistory(db,u.id),salary,levelUnlock:{qualifiedDirectReferralCount:qualifiedDirects,unlockedLevel:levelUnlocked,requiredStakeUsd:LEVEL_DIRECT_MIN_STAKE_USD,maxLevel:LEVEL_INCOME_PERCENTS.length},b1Records:b1.map(x=>({date:incomeLedgerDate(x),fromUser:u.name,amount:b1IncomeLedgerAmount(x),valueUsd:x.valueUsd,status:x.status||'credited'})),levelIncomeRecords:levelIncome,deposits,conversions,stakes:allStakes,team,referrals,globals,flushes,withdrawals};
 }
 const server=http.createServer(async(req,res)=>{
   try {
