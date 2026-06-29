@@ -8,7 +8,7 @@
     "start": "node server.js",
     "seed": "node scripts/seed.js",
     "smoke": "node scripts/smoke.js",
-    "test": "node scripts/nowpayments-smoke.js && node scripts/fund-transfer-smoke.js && node scripts/global-points-smoke.js && node scripts/scheduler-smoke.js && node scripts/bootstrap-admin-smoke.js && node scripts/global-team-display-smoke.js && node scripts/dashboard-responsive-smoke.js && node scripts/staking-ui-smoke.js && node scripts/bnb-exchange-smoke.js && node scripts/exchange-ui-smoke.js && node scripts/convert-api-smoke.js && node scripts/exchange-reserve-smoke.js && node scripts/admin-bnb-reserve-smoke.js && node scripts/logout-smoke.js"
+    "test": "node scripts/nowpayments-smoke.js && node scripts/fund-transfer-smoke.js && node scripts/referral-b1-income-smoke.js && node scripts/global-points-smoke.js && node scripts/scheduler-smoke.js && node scripts/bootstrap-admin-smoke.js && node scripts/global-team-display-smoke.js && node scripts/dashboard-responsive-smoke.js && node scripts/staking-ui-smoke.js && node scripts/bnb-exchange-smoke.js && node scripts/exchange-ui-smoke.js && node scripts/convert-api-smoke.js && node scripts/exchange-reserve-smoke.js && node scripts/admin-bnb-reserve-smoke.js && node scripts/logout-smoke.js"
   },
   "engines": {
     "node": ">=18"
