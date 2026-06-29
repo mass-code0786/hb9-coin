@@ -1,4 +1,5 @@
 const assert = require('assert');
+process.env.MARKET_TEST_MODE = 'true';
 const fs = require('fs');
 const path = require('path');
 const { dashboard, globalTeamUnits } = require('../server');
@@ -10,8 +11,8 @@ assert.strictEqual(globalTeamUnits(0), 0, '0 USD must display as 0 Global Team')
 const user = { id: 'usr_global', name: 'Global User', email: 'global@hb9.local', role: 'user', status: 'active', createdAt: '2026-06-28T00:00:00.000Z' };
 const db = {
   users: [user],
-  settings: { dailyRoi: 2, directMultiplier: 2, fallbackPrice: 0.2 },
-  hb9_market_settings: { fallbackPrice: 0.2 },
+  settings: { dailyRoi: 2, directMultiplier: 2, fallbackPrice: null },
+  hb9_market_settings: { fallbackPrice: null },
   deposits: [],
   stakes: [],
   directBusiness: [],

@@ -35,8 +35,8 @@ function store() {
     salary_payouts: [],
     settings: {
       exchangeEnabled: true,
-      fallbackPrice: 0.2,
-      hb9Price: 0.2,
+      fallbackPrice: 0.19,
+      hb9Price: 0.19,
       priceOffset: 0,
       spreadPercent: 0,
       buyFeePercent: 0,
@@ -47,10 +47,10 @@ function store() {
       referralPercent: 10
     },
     hb9_market_settings: {
-      fallbackPrice: 0.2,
+      fallbackPrice: 0.19,
       priceOffset: 0,
       spreadPercent: 0,
-      manualOverrideEnabled: true
+      manualOverrideEnabled: false
     }
   };
 }
@@ -94,11 +94,11 @@ assert.strictEqual(db.referralLedger[0].sponsorId, 'usr_sponsor');
 assert.strictEqual(db.referralLedger[0].referredUserId, 'usr_user');
 assert.strictEqual(db.referralLedger[0].stakeId, stake.id);
 assert.strictEqual(db.referralLedger[0].referralPercent, 10);
-assert.strictEqual(db.referralLedger[0].referralUsdAmount, 2);
+assert.strictEqual(db.referralLedger[0].referralUsdAmount, 22.5);
 assert.strictEqual(db.referralLedger[0].referralHb9Amount, 10);
 assert.strictEqual(walletBalances(db, 'usr_sponsor').hb9, 10, 'sponsor wallet receives credited referral HB9');
 assert.strictEqual(db.directBusiness.filter(item => item.userId === 'usr_sponsor' && item.sourceUserId === 'usr_user' && item.stakeId === stake.id).length, 1, 'stake records sponsor direct business once');
-assert.strictEqual(db.directBusiness.find(item => item.stakeId === stake.id).amount, 20, 'direct business uses stake USD value');
+assert.strictEqual(db.directBusiness.find(item => item.stakeId === stake.id).amount, 225, 'direct business uses stake USD value');
 
 const referralCount = db.referralLedger.length;
 const businessCount = db.directBusiness.length;

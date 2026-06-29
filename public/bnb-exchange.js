@@ -110,9 +110,10 @@
     const asset = selectedExchangeAsset();
     activeExchangeAsset = asset;
     const renderId = ++exchangeRenderId;
-    const market = data.settings.market || { fallbackPrice: data.settings.hb9Price, priceOffset: .09, spreadPercent: 0 };
-    let price = asset === 'HB9' ? Number(market.fallbackPrice || data.settings.hb9Price) : null;
-    let buyPrice = asset === 'HB9' ? Number(market.fallbackPrice || data.settings.hb9Price) + Number(market.priceOffset || .09) : null;
+    const resolvedHb9Price = Number(data.hb9PriceSource?.price ?? data.settings.market?.hb9BasePrice ?? data.settings.market?.price ?? 0);
+    const market = data.settings.market || { hb9BasePrice: resolvedHb9Price, price: resolvedHb9Price, buyPrice: resolvedHb9Price, sellPrice: resolvedHb9Price, priceOffset: .09, spreadPercent: 0 };
+    let price = asset === 'HB9' ? Number(data.hb9PriceSource?.price ?? market.hb9BasePrice ?? market.price ?? 0) : null;
+    let buyPrice = asset === 'HB9' ? Number(data.hb9PriceSource?.buyPrice ?? market.hb9BuyPrice ?? market.buyPrice ?? ((data.hb9PriceSource?.price ?? market.hb9BasePrice ?? market.price ?? 0) + Number(market.priceOffset || .09))) : null;
     const swapDirection = asset === 'HB9' ? selectedHb9SwapDirection() : 'USDT_BNB';
     const fromAsset = swapDirection === 'HB9_USDT' ? 'HB9' : 'USDT';
     const toAsset = asset === 'BNB' ? 'BNB' : swapDirection === 'HB9_USDT' ? 'USDT' : 'HB9';
@@ -264,7 +265,7 @@
 
   pages.Stake = function(){
     const b = data.wallets || {};
-    const hb9Price = Number(data.settings.hb9Price || data.settings.market?.fallbackPrice || 0);
+    const hb9Price = Number(data.hb9PriceSource?.price ?? data.settings.market?.hb9BasePrice ?? data.settings.market?.price ?? 0);
     page.innerHTML = `<section class="card"><div class="income-header"><div><h2>Stake</h2></div>${badge(`${data.settings.lockDays}-day lock`, 'unpaid')}</div><div class="lock-card"><div><small>Available HB9</small><b>${points(b.hb9 || 0)} HB9</b></div><div><small>Available BNB</small><b>${formatAssetAmount(b.bnb || 0, 'BNB')} BNB</b></div><div><small>HB9 price</small><b>${money(hb9Price)}</b></div></div><form id="stake-asset" class="formrow"><div class="field"><label>Asset</label><select name="stakeAsset"><option value="HB9">HB9</option><option value="BNB">BNB</option></select></div><div class="field"><label>Stake Amount</label><input name="amount" type="number" min="0.01" step="0.01" placeholder="0.00"></div><div class="field"><label>Income Basis</label><input name="basis" value="Backend calculates HB9 equivalent" readonly></div><button class="primary">Stake</button></form></section><section class="card"><h2>Active Stakes</h2>${table(['Asset','Stake Amount','USD Value','HB9 Equivalent','Start','Status'], (data.stakes || []).slice().reverse().map(x => `<tr><td>${esc(x.stakeAsset || 'HB9')}</td><td>${String(x.stakeAsset || 'HB9').toUpperCase()==='BNB'?formatAssetAmount(x.stakeAmount ?? 0,'BNB'):points(x.stakeAmount ?? x.coinAmount ?? x.hb9Amount ?? 0)} ${esc(x.stakeAsset || 'HB9')}</td><td>${money(x.stakeUsdValue ?? x.amount ?? 0)}</td><td>${points(x.hb9EquivalentAmount ?? x.coinAmount ?? 0)} HB9</td><td>${esc(x.startDate || '')}</td><td>${badge(x.status, x.status === 'active' ? 'yes' : 'no')}</td></tr>`).join(''), 'No stakes yet', 'HB9 and BNB stakes will appear here.')}</section>`;
     const form = page.querySelector('#stake-asset');
     const asset = form.elements.stakeAsset;

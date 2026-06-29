@@ -1,4 +1,5 @@
 const assert = require('assert');
+process.env.MARKET_TEST_MODE = 'true';
 const fs = require('fs');
 const http = require('http');
 const os = require('os');
@@ -21,8 +22,8 @@ function db() {
       { id: 'usr_admin', name: 'Admin', email: 'admin@hb9.local', role: 'admin', status: 'active', createdAt },
       { id: 'usr_user', name: 'User', email: 'user@hb9.local', role: 'user', status: 'active', createdAt }
     ],
-    settings: { globalActivityMin: 5, globalActivityMax: 15, dailyRoi: 2, directMultiplier: 2, fallbackPrice: 0.2 },
-    hb9_market_settings: { fallbackPrice: 0.2 },
+    settings: { globalActivityMin: 5, globalActivityMax: 15, dailyRoi: 2, directMultiplier: 2, fallbackPrice: null },
+    hb9_market_settings: { fallbackPrice: null },
     directBusiness: [],
     deposits: [],
     stakes: [],

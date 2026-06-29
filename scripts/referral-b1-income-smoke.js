@@ -28,8 +28,8 @@ function fixture() {
     deposits: [],
     conversions: [{ id: 'cnv_sponsor', userId: 'usr_sponsor', direction: 'buy', toAsset: 'HB9', hb9Amount: 100, usdtAmount: 20, createdAt: now }],
     stakes: [
-      { id: 'stk_sponsor_old', userId: 'usr_sponsor', stakeAsset: 'HB9', stakeAmount: 100, amount: 20, usdValueAtStake: 20, hb9EquivalentAmount: 100, coinAmount: 100, hb9Amount: 100, hb9PriceAtStake: 0.2, status: 'active', startDate: date, createdAt: now },
-      { id: 'stk_bismillah_old', userId: 'usr_bismillah', stakeAsset: 'HB9', stakeAmount: 200, amount: 40, usdValueAtStake: 40, hb9EquivalentAmount: 200, coinAmount: 200, hb9Amount: 200, hb9PriceAtStake: 0.2, status: 'active', startDate: date, createdAt: now }
+      { id: 'stk_sponsor_old', userId: 'usr_sponsor', stakeAsset: 'HB9', stakeAmount: 100, amount: 20, usdValueAtStake: 20, hb9EquivalentAmount: 100, coinAmount: 100, hb9Amount: 100, hb9PriceAtStake: 0.19, status: 'active', startDate: date, createdAt: now },
+      { id: 'stk_bismillah_old', userId: 'usr_bismillah', stakeAsset: 'HB9', stakeAmount: 200, amount: 40, usdValueAtStake: 40, hb9EquivalentAmount: 200, coinAmount: 200, hb9Amount: 200, hb9PriceAtStake: 0.19, status: 'active', startDate: date, createdAt: now }
     ],
     withdrawals: [],
     transfers: [],
@@ -60,8 +60,8 @@ function fixture() {
     schedulerRuns: {},
     settings: {
       exchangeEnabled: true,
-      fallbackPrice: 0.2,
-      hb9Price: 0.2,
+      fallbackPrice: 0.19,
+      hb9Price: 0.19,
       priceOffset: 0,
       spreadPercent: 0,
       buyFeePercent: 0,
@@ -74,10 +74,10 @@ function fixture() {
       globalActivityMax: 15
     },
     hb9_market_settings: {
-      fallbackPrice: 0.2,
+      fallbackPrice: 0.19,
       priceOffset: 0,
       spreadPercent: 0,
-      manualOverrideEnabled: true
+      manualOverrideEnabled: false
     }
   };
 }
@@ -91,7 +91,7 @@ function fixture() {
   const newReferral = db.referralLedger.find(item => item.stakeId === newStake.id);
   assert(newReferral, 'direct referral stake creates referral income');
   assert.strictEqual(newReferral.referralPercent, 10);
-  assert.strictEqual(newReferral.referralUsdAmount, 2);
+  assert.strictEqual(newReferral.referralUsdAmount, 22.5);
   assert.strictEqual(newReferral.referralHb9Amount, 10);
 
   const summary = await repairReferralB1Income(db, { userSearch: 'Bismillah', fromDate: yesterday(), toDate: yesterday(), runB1: true });
@@ -102,11 +102,11 @@ function fixture() {
   const bismillahReferral = db.referralLedger.find(item => item.stakeId === 'stk_bismillah_old');
   assert(bismillahReferral, 'old Bismillah stake referral was repaired');
   assert.strictEqual(bismillahReferral.referralUsdAmount, 4);
-  assert.strictEqual(bismillahReferral.referralHb9Amount, 20);
+  assert.strictEqual(bismillahReferral.referralHb9Amount, 1.78);
   assert(db.directBusiness.some(item => item.userId === sponsor.id && item.sourceUserId === 'usr_bismillah' && item.stakeId === 'stk_bismillah_old'), 'old Bismillah stake direct business was repaired');
 
   const sponsorDashboard = dashboard(db, sponsor);
-  assert(sponsorDashboard.income.totalReferral >= 30, 'dashboard referral total includes direct and repaired referral income');
+  assert(sponsorDashboard.income.totalReferral >= 11.78, 'dashboard referral total includes direct and repaired referral income');
   assert(sponsorDashboard.income.totalB1 > 0, 'dashboard B1 total reads credited B1 ledger');
   const bismillahTeam = sponsorDashboard.team.find(item => item.name === 'Bismillah');
   assert(bismillahTeam, 'Bismillah appears in direct team');

@@ -122,9 +122,9 @@ async function readJsonWhenStable(file) {
       { id: 'res_usdt', asset: 'USDT', walletType: 'treasury', balance: 0, lockedBalance: 0, createdAt: now, updatedAt: now }
     ],
     hb9_supply: { asset: 'HB9', totalSupply: 1000000, fixed: true, createdAt: now },
-    hb9_market_settings: { fallbackPrice: 0.2, priceOffset: 0.09, spreadPercent: 5, manualOverrideEnabled: false, updatedBy: 'system', updatedAt: now },
+    hb9_market_settings: { fallbackPrice: null, priceOffset: 0.09, spreadPercent: 5, manualOverrideEnabled: false, updatedBy: 'system', updatedAt: now },
     hb9_price_history: [],
-    settings: { dailyRoi: 2, directMultiplier: 2, referralPercent: 10, globalActivityMin: 5, globalActivityMax: 15, globalPointValue: 0.02, hb9Price: 0.2, fallbackPrice: 0.2, priceOffset: 0.09, spreadPercent: 5, minWithdrawal: 20, withdrawalFeePercent: 5 }
+    settings: { dailyRoi: 2, directMultiplier: 2, referralPercent: 10, globalActivityMin: 5, globalActivityMax: 15, globalPointValue: 0.02, hb9Price: null, fallbackPrice: null, priceOffset: 0.09, spreadPercent: 5, minWithdrawal: 20, withdrawalFeePercent: 5 }
   }, null, 2));
 
   const child = spawn(process.execPath, ['server.js'], {

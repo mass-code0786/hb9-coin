@@ -16,7 +16,7 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const assert = (condition, message) => { if (!condition) throw Error(message); };
 const assertInteger = (value, message) => assert(Number.isInteger(value), message);
 const cents = value => Math.round((value + Number.EPSILON) * 100) / 100;
-const BASE_PRICE = 0.2;
+const BASE_PRICE = 2.25;
 const PRICE_OFFSET = 0.09;
 const BUY_PRICE = cents(BASE_PRICE + PRICE_OFFSET);
 const SELL_PRICE = cents(Math.max(BASE_PRICE - PRICE_OFFSET, 0));
@@ -195,7 +195,7 @@ async function main() {
     fs.rmSync(dataFile, { force: true });
     const server = spawn(process.execPath, ['server.js'], {
       cwd: path.join(__dirname, '..'),
-      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true', HD_WALLET_XPUB: TEST_XPUB, HD_WALLET_XPRV: TEST_XPRV, HD_WALLET_MNEMONIC: TEST_MNEMONIC, HD_WALLET_DERIVATION_PATH: TEST_HD_PATH, DEPOSIT_WATCHER_TEST_MODE: 'true' },
+      env: { ...process.env, PORT: String(port), DATA_FILE: dataFile, DEMO_MODE: 'true', AUTH_ENABLED: 'true', AUTH_BYPASS: 'false', MARKET_TEST_MODE: 'true', HB9_PRICE_FALLBACK: String(BASE_PRICE), HD_WALLET_XPUB: TEST_XPUB, HD_WALLET_XPRV: TEST_XPRV, HD_WALLET_MNEMONIC: TEST_MNEMONIC, HD_WALLET_DERIVATION_PATH: TEST_HD_PATH, DEPOSIT_WATCHER_TEST_MODE: 'true' },
       stdio: 'ignore'
     });
 

@@ -39,6 +39,7 @@ const HB9_TOTAL_SUPPLY = 1000000;
 const HB9_EXCHANGE_RESERVE_TOTAL = Math.max(0, Number(process.env.HB9_EXCHANGE_RESERVE_TOTAL || HB9_TOTAL_SUPPLY));
 const BNB_EXCHANGE_RESERVE_TOTAL = process.env.BNB_EXCHANGE_RESERVE_TOTAL === undefined ? null : Math.max(0, Number(process.env.BNB_EXCHANGE_RESERVE_TOTAL || 0));
 const DEFAULT_PRICE_OFFSET = 0.09;
+const TEST_HB9_PRICE = 2.25;
 const LEVEL_INCOME_PERCENTS = [0.25,0.25,0.25,0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1,1,1,1,1,1,1];
 const LEVEL_DIRECT_MIN_STAKE_USD = 2;
 const SALARY_CYCLE_DAYS = 15;
@@ -101,8 +102,24 @@ function runtimeStorageDiagnostics(db=readDB()){
   };
 }
 function initializeDB(){ DEV_ONLY_DEMO ? seedDevOnlyDemo() : seedProductionEmpty(); }
+function envHb9FallbackPrice(){
+  const raw=process.env.HB9_PRICE_FALLBACK ?? process.env.HB9_FALLBACK_PRICE ?? process.env.HB9_PRICE_USD_FALLBACK;
+  if(raw===undefined||raw===null||String(raw).trim()==='')return null;
+  const value=Number(raw);
+  if(!Number.isFinite(value)||value<=0)throw Error('HB9 fallback price env must be greater than zero');
+  return value;
+}
+function syncHb9FallbackPrice(db){
+  if(process.env.MARKET_TEST_MODE==='true')return TEST_HB9_PRICE;
+  const envFallback=envHb9FallbackPrice();
+  if(envFallback)return envFallback;
+  const settings=marketSettings(db);
+  if(settings.manualOverrideEnabled&&Number(settings.fallbackPrice)>0)return Number(settings.fallbackPrice);
+  throw Error('HB9 price source unavailable');
+}
 function baseSettings(){
-  return {dailyRoi:2,directMultiplier:2,referralPercent:10,globalActivityMin:5,globalActivityMax:15,globalPointValue:0.02,hb9Price:0.2,priceMode:'icp_proxy',exchangeEnabled:true,tradingFeePercent:0,buyFeePercent:0,sellFeePercent:0,fallbackPrice:0.2,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,minWithdrawal:20,withdrawalFeePercent:5,minHb9Transfer:1,hb9TransferFeePercent:0,manualWithdrawalApproval:true,treasuryWalletBSC:process.env.TREASURY_WALLET_BSC||''};
+  const fallback=envHb9FallbackPrice();
+  return {dailyRoi:2,directMultiplier:2,referralPercent:10,globalActivityMin:5,globalActivityMax:15,globalPointValue:0.02,hb9Price:fallback,priceMode:'icp_proxy',exchangeEnabled:true,tradingFeePercent:0,buyFeePercent:0,sellFeePercent:0,fallbackPrice:fallback,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,minWithdrawal:20,withdrawalFeePercent:5,minHb9Transfer:1,hb9TransferFeePercent:0,manualWithdrawalApproval:true,treasuryWalletBSC:process.env.TREASURY_WALLET_BSC||''};
 }
 function emptyDB(){
   const now = new Date().toISOString();
@@ -118,7 +135,7 @@ function emptyDB(){
       {id:'res_usdt',asset:'USDT',walletType:'treasury',balance:0,lockedBalance:0,createdAt:now,updatedAt:now}
     ],
     reserve_ledger:[], burn_ledger:[], wallet_ledger:[], exchange_orders:[], income_emissions:[],
-    hb9_market_settings:{fallbackPrice:0.2,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,updatedBy:'system',updatedAt:now},
+    hb9_market_settings:{fallbackPrice:envHb9FallbackPrice(),priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,updatedBy:'system',updatedAt:now},
     hb9_price_history:[],
     settings:baseSettings()
   };
@@ -144,8 +161,8 @@ function seedDevOnlyDemo() {
       {id:'usr_bob',name:'Bob Direct',email:'bob@hb9.local',role:'user',status:'active',passwordHash:bob.hash,salt:bob.salt,walletAddress:'0x2222222222222222222222222222222222222222',sponsorId:'usr_alice',createdAt:now}
     ],
     deposits:[{id:'dep_demo',userId:'usr_alice',amount:100,status:'approved',asset:'USDT',chain:'BSC',network:'USDT BEP20 (Demo)',createdAt:now,approvedAt:now,approvedBy:'usr_admin'}],
-    conversions:[{id:'cnv_demo',userId:'usr_alice',direction:'buy',usdtAmount:100,hb9Amount:500,rate:0.2,buyPrice:0.2,sellPrice:0.19,createdAt:now}],
-    stakes:[{id:'stk_demo',userId:'usr_alice',amount:100,usdValueAtStake:100,coinAmount:500,hb9Amount:500,hb9PriceAtStake:0.2,status:'active',startDate:datePlus(today(),-8),dailyRate:0.02,createdAt:now}],
+    conversions:[{id:'cnv_demo',userId:'usr_alice',direction:'buy',usdtAmount:100,hb9Amount:roundCurrency(100/TEST_HB9_PRICE),rate:TEST_HB9_PRICE,buyPrice:TEST_HB9_PRICE,sellPrice:roundCurrency(TEST_HB9_PRICE-DEFAULT_PRICE_OFFSET),createdAt:now}],
+    stakes:[{id:'stk_demo',userId:'usr_alice',amount:100,usdValueAtStake:100,coinAmount:roundCurrency(100/TEST_HB9_PRICE),hb9Amount:roundCurrency(100/TEST_HB9_PRICE),hb9PriceAtStake:TEST_HB9_PRICE,status:'active',startDate:datePlus(today(),-8),dailyRate:0.02,createdAt:now}],
     directBusiness:[{id:'biz_demo',userId:'usr_alice',sourceUserId:'usr_bob',amount:75,reason:'Demo direct business',createdAt:now}],
     incomeLedger:[], referralLedger:[], level_income_ledger:[], salary_ranks:DEFAULT_SALARY_RANKS, salary_qualifications:[], salary_payouts:[], globalTeamRecords:[], flushRecords:[], withdrawals:[], transfers:[], transferLedger:[], directBusinessAudit:[], dailyRuns:[],
     deposit_addresses:[],
@@ -166,12 +183,12 @@ function seedDevOnlyDemo() {
       {id:'wlt_seed_buy_hb9',userId:'usr_alice',asset:'HB9',direction:'credit',amount:500,reason:'Seed HB9 buy',createdAt:now,immutable:true},
       {id:'wlt_seed_stake_hb9',userId:'usr_alice',asset:'HB9',direction:'lock',amount:500,reason:'Seed HB9 stake',createdAt:now,immutable:true}
     ], exchange_orders:[], income_emissions:[],
-    hb9_market_settings:{fallbackPrice:0.2,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,updatedBy:'usr_admin',updatedAt:now},
+    hb9_market_settings:{fallbackPrice:envHb9FallbackPrice(),priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,updatedBy:'usr_admin',updatedAt:now},
     hb9_price_history:[],
     settings:{...baseSettings(),treasuryWalletBSC:'0x9999999999999999999999999999999999999999'}
   });
 }
-function setting(db, key) { return db.settings[key] ?? (key==='hb9Price' ? 0.2 : undefined); }
+function setting(db, key) { return db.settings[key]; }
 function ensureSupply(db){
   const now=new Date().toISOString();
   db.hb9_supply=db.hb9_supply||{asset:'HB9',totalSupply:HB9_TOTAL_SUPPLY,fixed:true,createdAt:now};
@@ -283,10 +300,13 @@ function solvencyReport(db){
 }
 function marketSettings(db){
   db.hb9_market_settings=db.hb9_market_settings||{};
-  db.hb9_market_settings.fallbackPrice=Number(db.hb9_market_settings.fallbackPrice ?? db.settings?.fallbackPrice ?? db.settings?.hb9Price ?? 0.2);
+  const envFallback=envHb9FallbackPrice();
+  const storedFallback=Number(db.hb9_market_settings.fallbackPrice ?? db.settings?.fallbackPrice);
+  const manual=Boolean(db.hb9_market_settings.manualOverrideEnabled ?? db.settings?.manualOverrideEnabled);
+  db.hb9_market_settings.fallbackPrice=envFallback ?? (manual&&Number.isFinite(storedFallback)&&storedFallback>0?storedFallback:null);
   db.hb9_market_settings.priceOffset=Number(db.hb9_market_settings.priceOffset ?? db.settings?.priceOffset ?? DEFAULT_PRICE_OFFSET);
   db.hb9_market_settings.spreadPercent=Number(db.hb9_market_settings.spreadPercent ?? db.settings?.spreadPercent ?? 0);
-  db.hb9_market_settings.manualOverrideEnabled=Boolean(db.hb9_market_settings.manualOverrideEnabled ?? db.settings?.manualOverrideEnabled);
+  db.hb9_market_settings.manualOverrideEnabled=manual;
   db.hb9_market_settings.updatedBy=db.hb9_market_settings.updatedBy||'system';
   db.hb9_market_settings.updatedAt=db.hb9_market_settings.updatedAt||new Date().toISOString();
   db.hb9_price_history=db.hb9_price_history||[];
@@ -305,7 +325,7 @@ function setMarketSettings(db,{fallbackPrice,buyPrice,priceOffset,spreadPercent,
   const manual=manualOverrideEnabled===true||manualOverrideEnabled==='true'||manualOverrideEnabled===1||manualOverrideEnabled==='1';
   const updatedAt=new Date().toISOString();
   db.hb9_market_settings={fallbackPrice:roundCurrency(fallback),priceOffset:roundCurrency(offset),spreadPercent:spread,manualOverrideEnabled:manual,updatedBy,updatedAt};
-  Object.assign(db.settings,{fallbackPrice:roundCurrency(fallback),priceOffset:roundCurrency(offset),spreadPercent:spread,manualOverrideEnabled:manual,buyFeePercent:buyFee,sellFeePercent:sellFee,hb9Price:roundCurrency(fallback),priceMode:manual?'manual_override':'icp_proxy'});
+  Object.assign(db.settings,{fallbackPrice:roundCurrency(fallback),priceOffset:roundCurrency(offset),spreadPercent:spread,manualOverrideEnabled:manual,buyFeePercent:buyFee,sellFeePercent:sellFee,hb9Price:null,priceMode:manual?'manual_override':'icp_proxy'});
   db.hb9_price_history=db.hb9_price_history||[];
   db.hb9_price_history.push({id:id('mph'),...db.hb9_market_settings,buyFeePercent:buyFee,sellFeePercent:sellFee});
   audit(db,'HB9_MARKET_PRICE_UPDATED',db.hb9_market_settings);
@@ -326,11 +346,12 @@ function hb9MarketReport(db){
 async function exchangeMarket(db,interval='1d',limit=120){
   const settings=marketSettings(db), manual=Boolean(settings.manualOverrideEnabled);
   if(process.env.MARKET_TEST_MODE==='true'){
-    const icpPrice=Number(settings.fallbackPrice)||0.2, candles=Array.from({length:limit},(_,index)=>{const open=icpPrice+(index%5)*.001,close=open+(index%2?.0015:-.001);return {time:Date.now()-(limit-index)*86400000,open,high:open+.003,low:open-.003,close,volume:1000+index}});
+    const icpPrice=Number(settings.fallbackPrice)||TEST_HB9_PRICE, candles=Array.from({length:limit},(_,index)=>{const open=icpPrice+(index%5)*.001,close=open+(index%2?.0015:-.001);return {time:Date.now()-(limit-index)*86400000,open,high:open+.003,low:open-.003,close,volume:1000+index}});
     const prices=offsetPrices(manual?settings.fallbackPrice:icpPrice,settings);
     return {source:manual?'manual_override':'icp_proxy',price:prices.basePrice,icpPrice:prices.basePrice,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:manual,high24h:.21,low24h:.19,baseVolume:100000,quoteVolume:20000,changePercent:1.25,candles};
   }
   if(manual){
+    if(!Number.isFinite(Number(settings.fallbackPrice))||Number(settings.fallbackPrice)<=0)throw Error('Manual HB9 price is unavailable');
     const prices=offsetPrices(settings.fallbackPrice,settings);
     return {source:'manual_override',price:prices.basePrice,icpPrice:null,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:true,high24h:prices.buyPrice,low24h:prices.sellPrice,baseVolume:0,quoteVolume:0,changePercent:0,candles:[]};
   }
@@ -342,10 +363,17 @@ async function exchangeMarket(db,interval='1d',limit=120){
     if(!Number.isFinite(icpPrice)||!Array.isArray(candles)||!candles.length)throw Error('Invalid market response');
     const prices=offsetPrices(icpPrice,settings);
     return {source:'icp_proxy',price:prices.basePrice,icpPrice:prices.basePrice,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:false,high24h:Number(ticker.highPrice),low24h:Number(ticker.lowPrice),baseVolume:Number(ticker.volume),quoteVolume:Number(ticker.quoteVolume),changePercent:Number(ticker.priceChangePercent),candles:candles.map(x=>({time:x[0],open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),volume:Number(x[5])}))};
-  }catch(_){
-    const prices=offsetPrices(Number(settings.fallbackPrice)||0.2,settings);
+  }catch(error){
+    const fallback=envHb9FallbackPrice();
+    if(!fallback)throw Error(`HB9 price source unavailable: ${error.message}`);
+    audit(db,'HB9_PRICE_SOURCE_FALLBACK',{source:'env_fallback',price:fallback,reason:error.message});
+    const prices=offsetPrices(fallback,settings);
     return {source:'fallback',price:prices.basePrice,icpPrice:prices.basePrice,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:false,high24h:prices.buyPrice,low24h:prices.sellPrice,baseVolume:0,quoteVolume:0,changePercent:0,candles:[]};
   }
+}
+async function hb9PriceSource(db,options={}){
+  const market=await exchangeMarket(db,options.interval||'1d',options.limit||1);
+  return {source:market.source,price:Number(market.hb9BasePrice??market.price),buyPrice:Number(market.hb9BuyPrice??market.buyPrice),sellPrice:Number(market.hb9SellPrice??market.sellPrice),fallbackUsed:market.source==='fallback',market};
 }
 async function bnbMarket(interval='1d',limit=120){
   const fallback=Number(process.env.BNB_USDT_FALLBACK_PRICE||process.env.BNB_PRICE_FALLBACK||600);
@@ -375,13 +403,40 @@ function salaryCycleStart(date=today()){const d=new Date(`${date}T00:00:00.000Z`
 function salaryCycleEnd(cycleStart){return datePlus(cycleStart,SALARY_CYCLE_DAYS-1);}
 function salaryDirectCount(db,userId,minStakeUsd){return (db.users||[]).filter(u=>u.sponsorId===userId&&activeStakeUsd(db,u.id)>=minStakeUsd).length;}
 function downlineUsers(db,userId,maxLevel=20){
-  const result=[], queue=[{userId,level:0}];
+  const rootId=String(userId), result=[], queue=[{userId:rootId,level:0}], visited=new Set([rootId]);
   while(queue.length){
     const current=queue.shift();
     if(current.level>=maxLevel)continue;
-    (db.users||[]).filter(u=>u.sponsorId===current.userId&&u.role==='user').forEach(child=>{const level=current.level+1;result.push({user:child,level});queue.push({userId:child.id,level});});
+    (db.users||[]).filter(u=>u.sponsorId===current.userId&&u.role==='user').forEach(child=>{
+      if(visited.has(child.id))return;
+      visited.add(child.id);
+      const level=current.level+1;
+      result.push({user:child,level});
+      queue.push({userId:child.id,level});
+    });
   }
   return result;
+}
+function stakeInvestmentSummary(db,userId){
+  const stakes=(db.stakes||[]).filter(stake=>stake.userId===userId), active=stakes.filter(stake=>stake.status==='active');
+  const sumUsd=list=>roundCurrency(list.reduce((sum,stake)=>sum+(Number(stake.usdValueAtStake)||Number(stake.stakeUsdValue)||Number(stake.amount)||0),0));
+  const sumHb9=list=>roundCurrency(list.reduce((sum,stake)=>sum+(Number(stake.hb9EquivalentAmount)||Number(stake.coinAmount)||Number(stake.hb9Amount)||0),0));
+  const latest=active.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||stakes.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||null;
+  return {stakes,active,totalInvestmentUsd:sumUsd(stakes),activeStake:sumUsd(active),totalStakeHb9Equivalent:sumHb9(stakes),hb9EquivalentAmount:sumHb9(active),totalStakeAmount:roundCurrency(stakes.reduce((sum,stake)=>sum+(Number(stake.stakeAmount)||Number(stake.coinAmount)||Number(stake.hb9Amount)||0),0)),stakeAsset:latest?.stakeAsset||null,stakeCount:stakes.length,activeStakeCount:active.length};
+}
+function teamLevelsReport(db,userId,maxLevel=20){
+  const grouped=new Map();
+  downlineUsers(db,userId,maxLevel).forEach(({user,level})=>{
+    const investment=stakeInvestmentSummary(db,user.id), member={userId:user.id,name:user.name,email:user.email,joinedAt:user.createdAt,status:user.status,active:user.status==='active'&&!user.blocked,activeStake:investment.activeStake,totalInvestmentUsd:investment.totalInvestmentUsd,totalStakeAmount:investment.totalStakeAmount,stakeAsset:investment.stakeAsset,hb9EquivalentAmount:investment.totalStakeHb9Equivalent,activeHb9EquivalentAmount:investment.hb9EquivalentAmount,stakeCount:investment.stakeCount,activeStakeCount:investment.activeStakeCount};
+    if(!grouped.has(level))grouped.set(level,[]);
+    grouped.get(level).push(member);
+  });
+  const levels=Array.from({length:maxLevel},(_,index)=>{
+    const level=index+1, members=grouped.get(level)||[];
+    return {level,memberCount:members.length,totalInvestmentUsd:roundCurrency(members.reduce((sum,member)=>sum+(Number(member.totalInvestmentUsd)||0),0)),totalStakeHb9Equivalent:roundCurrency(members.reduce((sum,member)=>sum+(Number(member.hb9EquivalentAmount)||0),0)),members};
+  });
+  const summary={totalLevels:maxLevel,totalMembers:levels.reduce((sum,level)=>sum+level.memberCount,0),activeMembers:levels.reduce((sum,level)=>sum+level.members.filter(member=>member.active).length,0),totalInvestmentUsd:roundCurrency(levels.reduce((sum,level)=>sum+level.totalInvestmentUsd,0)),totalHb9Equivalent:roundCurrency(levels.reduce((sum,level)=>sum+level.totalStakeHb9Equivalent,0))};
+  return {levels,summary};
 }
 function salaryTeamBusinessUsd(db,userId){return roundCurrency(downlineUsers(db,userId,20).reduce((sum,item)=>sum+activeStakeUsd(db,item.user.id),0));}
 function totalSalaryPaidUsd(db,userId){ensureSalaryTables(db);return roundCurrency(db.salary_payouts.filter(x=>x.userId===userId&&x.status==='credited').reduce((n,x)=>n+(Number(x.usdAmount)||0),0));}
@@ -405,7 +460,7 @@ function salaryReport(db,userId){
 }
 async function processSalaryPayouts(db,date=today()){
   ensureSalaryTables(db);
-  const market=await exchangeMarket(db,'1d',1), price=Number(market.hb9BasePrice||market.price||market.icpPrice||marketSettings(db).fallbackPrice), cycleStart=salaryCycleStart(date), cycleEnd=salaryCycleEnd(cycleStart), createdAt=new Date().toISOString();
+  const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1}), price=priceInfo.price, cycleStart=salaryCycleStart(date), cycleEnd=salaryCycleEnd(cycleStart), createdAt=new Date().toISOString();
   const summary={date,cycleStart,cycleEnd,hb9Price:price,processedUsers:0,creditedUsers:0,queuedUsers:0,cappedUsers:0,totalSalaryUsd:0,totalSalaryHb9:0,skippedUsers:0};
   for(const user of (db.users||[]).filter(x=>x.role==='user')){
     const report=salaryReport(db,user.id), rank=report.currentRank;
@@ -522,7 +577,7 @@ function deterministicInt(seed, min, max) {
   return low+(seedNum%span);
 }
 function globalTeamUnits(valueUsd){return Math.round((Number(valueUsd)||0)/0.02);}
-function audit(db,type,details){db.auditLogs=db.auditLogs||[];const record={id:id('aud'),type,details,createdAt:new Date().toISOString()};db.auditLogs.push(record);if(/^(GLOBAL_TEAM|ROI|REFERRAL_INCOME|B1_INCOME)_/.test(type))console.log(type,{...details,createdAt:record.createdAt});}
+function audit(db,type,details){db.auditLogs=db.auditLogs||[];const record={id:id('aud'),type,details,createdAt:new Date().toISOString()};db.auditLogs.push(record);if(/^(GLOBAL_TEAM|ROI|REFERRAL_INCOME|B1_INCOME|HB9_PRICE)_/.test(type))console.log(type,{...details,createdAt:record.createdAt});}
 function emitDepositAddressLog(db,type,details){console.warn(type,details);audit(db,type,details);}
 function normalizeChain(chain){return String(chain||'BSC').trim().toUpperCase();}
 function nextHdIndex(db,chain){return (db.deposit_addresses||[]).filter(x=>x.chain===chain).reduce((max,x)=>Math.max(max,Number(x.hdIndex)||0),-1)+1;}
@@ -888,7 +943,7 @@ function adminFundTransfer(db,admin,{userId,asset,action,amount,reason}){
 }
 async function assetBuyPrice(db,asset){
   const normalized=String(asset||'HB9').toUpperCase();
-  if(normalized==='HB9'){const market=await exchangeMarket(db);return {asset:'HB9',price:Number(market.buyPrice),market};}
+  if(normalized==='HB9'){const priceInfo=await hb9PriceSource(db);return {asset:'HB9',price:priceInfo.buyPrice,market:priceInfo.market};}
   if(normalized==='BNB'){const market=await bnbMarket('1d',1);return {asset:'BNB',price:Number(market.price),market};}
   throw Error('Unsupported conversion asset');
 }
@@ -942,7 +997,7 @@ async function createStake(db,user,{amount,stakeAsset='HB9',clientRequestId=null
   if(clientRequestId){const existing=(db.stakes||[]).find(x=>x.userId===user.id&&x.clientRequestId===String(clientRequestId));if(existing)return existing;}
   if(!Number.isFinite(stakeAmount)||stakeAmount<=0)throw Error(`${normalized} stake amount is invalid`);
   if(stakeAmount>Number(balances[normalized.toLowerCase()]||0))throw Error(`Not enough ${normalized} balance`);
-  const hb9Market=await exchangeMarket(db), hb9Price=Number(hb9Market.buyPrice||hb9Market.hb9BasePrice||hb9Market.price||marketSettings(db).fallbackPrice), payoutPrice=Number(hb9Market.hb9BasePrice||hb9Market.price||hb9Market.icpPrice||marketSettings(db).fallbackPrice);
+  const hb9PriceInfo=await hb9PriceSource(db), hb9Price=hb9PriceInfo.buyPrice, payoutPrice=hb9PriceInfo.price;
   if(!Number.isFinite(hb9Price)||hb9Price<=0)throw Error('HB9 stake price is unavailable');
   let bnbPriceAtStake=null, usdAmount, hb9EquivalentAmount;
   if(normalized==='BNB'){
@@ -1205,7 +1260,7 @@ function retrySweep(db,sweep){if(!sweep||sweep.status!=='failed_retryable')throw
 function incomeContext(db,userId,date,hb9PriceOverride=null) {
   const activeStakeUsd=roundCurrency(activeStakes(db,userId).reduce((n,s)=>n+s.amount,0));
   const dailyRoiPercent=Number(setting(db,'dailyRoi'));
-  const hb9Price=Number(hb9PriceOverride ?? marketSettings(db).fallbackPrice);
+  const hb9Price=Number(hb9PriceOverride ?? syncHb9FallbackPrice(db));
   const pointValue=0.02;
   const businessRequired=roundCurrency(activeStakeUsd*setting(db,'directMultiplier'));
   const businessCurrent=roundCurrency(business(db,userId));
@@ -1300,7 +1355,7 @@ function utcDate(date=new Date()){return date.toISOString().slice(0,10);}
 function utcDateTime(date,hour,minute){return new Date(`${date}T${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}:00.000Z`);}
 function lastDueDate(now,hour,minute){const d=utcDate(now);return now>=utcDateTime(d,hour,minute)?d:datePlus(d,-1);}
 function nextDueTime(now,hour,minute){const d=utcDate(now),todayRun=utcDateTime(d,hour,minute);return now<todayRun?todayRun:utcDateTime(datePlus(d,1),hour,minute);}
-async function marketPayoutPrice(db){try{const market=await exchangeMarket(db,'1d',1);return Number(market.hb9BasePrice||market.price||market.icpPrice||marketSettings(db).fallbackPrice);}catch(_){return Number(marketSettings(db).fallbackPrice);}}
+async function marketPayoutPrice(db){return (await hb9PriceSource(db,{interval:'1d',limit:1})).price;}
 function schedulerRangeStart(db,kind){
   const users=(db.users||[]).filter(user=>user.role==='user');
   const firstUserDate=users.map(globalPointEligibilityDate).sort()[0]||today();
@@ -1353,6 +1408,7 @@ async function startDailySchedulers(){
 async function repairReferralB1Income(db,{userSearch=null,fromDate=null,toDate=null,runB1=true}={}){
   ensureSupply(db);
   db.referralLedger=db.referralLedger||[];db.directBusiness=db.directBusiness||[];db.level_income_ledger=db.level_income_ledger||[];db.incomeLedger=db.incomeLedger||[];db.auditLogs=db.auditLogs||[];
+  const currentPayoutPrice=await marketPayoutPrice(db);
   const query=String(userSearch||'').trim().toLowerCase(), users=db.users||[], stakes=(db.stakes||[]).slice().sort((a,b)=>String(a.createdAt||a.startDate||'').localeCompare(String(b.createdAt||b.startDate||'')));
   const before={referralLedger:db.referralLedger.length,directBusiness:db.directBusiness.length,levelIncome:db.level_income_ledger.length,incomeLedger:db.incomeLedger.length,flushRecords:(db.flushRecords||[]).length};
   const inspectedUsers=[], repairedStakes=[];
@@ -1361,7 +1417,7 @@ async function repairReferralB1Income(db,{userSearch=null,fromDate=null,toDate=n
     if(!user||!user.sponsorId)continue;
     const sponsor=userById(db,user.sponsorId);
     if(query&&!`${user.id} ${user.name||''} ${user.email||''} ${sponsor?.id||''} ${sponsor?.name||''} ${sponsor?.email||''}`.toLowerCase().includes(query))continue;
-    const userStakes=stakes.filter(item=>item.userId===user.id), firstStake=userStakes[0]?.id===stake.id, payoutPrice=Number(stake.hb9PriceAtStake)||Number(stake.hb9PriceAtPayout)||Number(marketSettings(db).fallbackPrice)||0.2;
+    const userStakes=stakes.filter(item=>item.userId===user.id), firstStake=userStakes[0]?.id===stake.id, payoutPrice=Number(stake.hb9PriceAtPayout)||currentPayoutPrice;
     inspectedUsers.push({id:user.id,name:user.name,email:user.email,sponsorId:user.sponsorId,sponsorName:sponsor?.name||null,sponsorEmail:sponsor?.email||null,stakeId:stake.id,stakeAsset:stake.stakeAsset||'HB9',stakeAmount:Number(stake.stakeAmount)||Number(stake.coinAmount)||0,stakeUsdValue:Number(stake.usdValueAtStake)||Number(stake.amount)||0,status:stake.status,startDate:stake.startDate,createdAt:stake.createdAt,hasReferral:db.referralLedger.some(x=>x.stakeId===stake.id&&x.type==='REFERRAL_INCOME'),hasDirectBusiness:db.directBusiness.some(x=>x.userId===user.sponsorId&&x.sourceUserId===user.id&&x.stakeId===stake.id)});
     const result=distributeStakeIncome(db,user,stake,payoutPrice,firstStake);
     if(result&&(result.referralCreated||result.directBusinessCreated))repairedStakes.push({stakeId:stake.id,userId:user.id,sponsorId:user.sponsorId,...result});
@@ -1386,13 +1442,8 @@ function body(req) { return new Promise((resolve,reject)=>{let b='';req.on('data
 function rawBody(req) { return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('error',reject);req.on('end',()=>resolve(b));}); }
 function safeUser(u){ const {passwordHash,salt,...safe}=u; return safe; }
 function directReferralInvestmentSummary(db,member){
-  const stakes=(db.stakes||[]).filter(stake=>stake.userId===member.id), active=stakes.filter(stake=>stake.status==='active');
-  const totals=list=>({
-    totalStakeUsd:roundCurrency(list.reduce((sum,stake)=>sum+(Number(stake.usdValueAtStake)||Number(stake.stakeUsdValue)||Number(stake.amount)||0),0)),
-    hb9Equivalent:roundCurrency(list.reduce((sum,stake)=>sum+(Number(stake.hb9EquivalentAmount)||Number(stake.coinAmount)||Number(stake.hb9Amount)||0),0))
-  });
-  const allTotals=totals(stakes), activeTotals=totals(active), latest=active.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||stakes.slice().sort((a,b)=>String(b.createdAt||b.startDate||'').localeCompare(String(a.createdAt||a.startDate||'')))[0]||null;
-  return {id:member.id,name:member.name,email:member.email,joinedAt:member.createdAt,status:member.status,active:member.status==='active'&&!member.blocked,totalStakeUsd:allTotals.totalStakeUsd,totalInvestmentUsd:allTotals.totalStakeUsd,activeStakeUsd:activeTotals.totalStakeUsd,stake:activeTotals.totalStakeUsd,stakeAsset:latest?.stakeAsset||null,stakeAmount:Number(latest?.stakeAmount)||Number(latest?.coinAmount)||Number(latest?.hb9Amount)||0,hb9EquivalentAmount:activeTotals.hb9Equivalent,directBusinessVolume:roundCurrency((db.directBusiness||[]).filter(x=>x.userId===member.sponsorId&&x.sourceUserId===member.id).reduce((sum,x)=>sum+(Number(x.amount)||0),0)),stakeCount:stakes.length,activeStakeCount:active.length};
+  const investment=stakeInvestmentSummary(db,member.id);
+  return {id:member.id,name:member.name,email:member.email,joinedAt:member.createdAt,status:member.status,active:member.status==='active'&&!member.blocked,totalStakeUsd:investment.totalInvestmentUsd,totalInvestmentUsd:investment.totalInvestmentUsd,activeStakeUsd:investment.activeStake,stake:investment.activeStake,stakeAsset:investment.stakeAsset,stakeAmount:investment.totalStakeAmount,hb9EquivalentAmount:investment.totalStakeHb9Equivalent,activeHb9EquivalentAmount:investment.hb9EquivalentAmount,directBusinessVolume:roundCurrency((db.directBusiness||[]).filter(x=>x.userId===member.sponsorId&&x.sourceUserId===member.id).reduce((sum,x)=>sum+(Number(x.amount)||0),0)),stakeCount:investment.stakeCount,activeStakeCount:investment.activeStakeCount};
 }
 function dashboard(db,u) {
   const stake=activeStakes(db,u.id).reduce((n,s)=>n+s.amount,0), completed=business(db,u.id), required=stake*setting(db,'directMultiplier');
@@ -1429,12 +1480,13 @@ const server=http.createServer(async(req,res)=>{
       if (p==='/api/auth/logout'&&method==='POST') { const bearer=(req.headers.authorization||'').replace('Bearer ',''); if(bearer)sessions.delete(bearer); return send(res,200,{message:'Logged out'}); }
       if (p==='/api/auth/register'&&method==='POST') { const {name,email,password,sponsorEmail,walletAddress}=await body(req); if(!name||!email||!password||password.length<8)return send(res,400,{error:'Name, email and 8+ character password are required'}); if(walletAddress&&typeof walletAddress==='string'&&!/^0x[a-fA-F0-9]{40}$/.test(walletAddress))return send(res,400,{error:'Enter a valid 42-character BEP20 wallet address starting with 0x'}); if(db.users.some(x=>x.email.toLowerCase()===email.toLowerCase()))return send(res,409,{error:'Email already registered'}); const h=hash(password), sponsor=db.users.find(x=>x.email===sponsorEmail); const u={id:id('usr'),name,email:email.toLowerCase(),role:'user',status:'active',passwordHash:h.hash,salt:h.salt,walletAddress:walletAddress||null,sponsorId:sponsor?.id||null,createdAt:new Date().toISOString()}; db.users.push(u);writeDB(db);return send(res,201,{message:'Registration complete. Please log in.'}); }
       const u=auth(req,db); if(!u)return send(res,401,{error:'Authentication required'});
-      if(p==='/api/market/hb9-ticker'&&method==='GET'){try{const market=await exchangeMarket(db,'1d',1);return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,price:market.price,icpPrice:market.icpPrice,hb9BasePrice:market.hb9BasePrice,priceOffset:market.priceOffset,hb9BuyPrice:market.hb9BuyPrice,hb9SellPrice:market.hb9SellPrice,buyPrice:market.buyPrice,sellPrice:market.sellPrice,spreadPercent:market.spreadPercent,manualOverrideEnabled:market.manualOverrideEnabled,high24h:market.high24h,low24h:market.low24h,volume24h:market.baseVolume,quoteVolume24h:market.quoteVolume,changePercent:market.changePercent});}catch(error){return send(res,503,{error:error.message});}}
+      if(p==='/api/team/levels'&&method==='GET'){const requestedUserId=url.searchParams.get('userId')||u.id;if(requestedUserId!==u.id&&u.role!=='admin')return send(res,403,{error:'Admin only action'});const target=userById(db,requestedUserId);if(!target||target.role!=='user')return send(res,404,{error:'User not found'});return send(res,200,teamLevelsReport(db,target.id,20));}
+      if(p==='/api/market/hb9-ticker'&&method==='GET'){try{const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1}),market=priceInfo.market;return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,price:priceInfo.price,icpPrice:market.icpPrice,hb9BasePrice:priceInfo.price,priceOffset:market.priceOffset,hb9BuyPrice:priceInfo.buyPrice,hb9SellPrice:priceInfo.sellPrice,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,spreadPercent:market.spreadPercent,manualOverrideEnabled:market.manualOverrideEnabled,high24h:market.high24h,low24h:market.low24h,volume24h:market.baseVolume,quoteVolume24h:market.quoteVolume,changePercent:market.changePercent,fallbackUsed:priceInfo.fallbackUsed});}catch(error){return send(res,503,{error:error.message});}}
       if(p==='/api/market/hb9-klines'&&method==='GET'){const interval={"15m":"15m","1h":"1h","4h":"4h","1d":"1d"}[url.searchParams.get('interval')]||'1d';try{const market=await exchangeMarket(db,interval,120);return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,candles:market.candles});}catch(error){return send(res,503,{error:error.message});}}
-      if(p==='/api/market/hb9-usdt'&&method==='GET'){const market=await exchangeMarket(db);return send(res,200,{symbol:'HB9/USDT',...market});}
+      if(p==='/api/market/hb9-usdt'&&method==='GET'){const priceInfo=await hb9PriceSource(db);return send(res,200,{symbol:'HB9/USDT',...priceInfo.market,fallbackUsed:priceInfo.fallbackUsed});}
       if(p==='/api/market/bnb-ticker'&&method==='GET'){const market=await bnbMarket('1d',1);return send(res,200,market);}
       if(p==='/api/market/bnb-klines'&&method==='GET'){const interval={"15m":"15m","1h":"1h","4h":"4h","1d":"1d"}[url.searchParams.get('interval')]||'1d';const market=await bnbMarket(interval,120);return send(res,200,{symbol:'BNB/USDT',pair:'BNB/USDT',source:market.source,candles:market.candles});}
-      if(p==='/api/dashboard'&&method==='GET'){return send(res,200,dashboard(db,u));}
+      if(p==='/api/dashboard'&&method==='GET'){const payload=dashboard(db,u);try{const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});payload.hb9PriceSource={source:priceInfo.source,price:priceInfo.price,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,fallbackUsed:priceInfo.fallbackUsed};payload.settings.market={...payload.settings.market,hb9BasePrice:priceInfo.price,hb9BuyPrice:priceInfo.buyPrice,hb9SellPrice:priceInfo.sellPrice,price:priceInfo.price,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,source:priceInfo.source,fallbackUsed:priceInfo.fallbackUsed};payload.settings.hb9Price=priceInfo.price;}catch(error){payload.hb9PriceSource={source:'unavailable',price:null,buyPrice:null,sellPrice:null,fallbackUsed:false,error:error.message};}return send(res,200,payload);}
       if(p==='/api/deposit-address'&&method==='GET')return send(res,410,{error:'HD wallet deposit addresses are disabled. Use NOWPayments deposits.'});
       if(p==='/api/deposits'&&method==='POST'){try{const input=await body(req),result=await createNowPaymentsDeposit(db,u.id,input.amount);writeDB(db);return send(res,201,{message:'NOWPayments deposit created',deposit:result.deposit,payment:result.payment,service:result.service});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/internal/deposit-events'&&method==='POST')return send(res,410,{error:'BEP20 watcher deposit ingestion is disabled'});
@@ -1448,7 +1500,7 @@ const server=http.createServer(async(req,res)=>{
       if(u.role!=='admin')return send(res,403,{error:'Admin only action'});
       if(p==='/api/admin/transfer-settings'&&method==='PUT'){const {minHb9Transfer,hb9TransferFeePercent}=await body(req),min=Number(minHb9Transfer),fee=Number(hb9TransferFeePercent);if(!Number.isFinite(min)||min<0||!Number.isFinite(fee)||fee<0||fee>100)return send(res,400,{error:'Invalid transfer settings'});db.settings.minHb9Transfer=min;db.settings.hb9TransferFeePercent=fee;writeDB(db);return send(res,200,{message:'Transfer settings saved',settings:db.settings});}
       if(p==='/api/admin/fund-transfer'&&method==='POST'){try{const result=adminFundTransfer(db,u,await body(req));writeDB(db);return send(res,201,{message:'Admin fund transfer completed',...result});}catch(error){return send(res,error.message==='Admin only action'?403:400,{error:error.message});}}
-      if(p==='/api/admin/overview'&&method==='GET'){return send(res,200,{users:db.users.filter(x=>x.role==='user').map(x=>({...safeUser(x),summary:dashboard(db,x)})),settings:{...db.settings,market:marketSettings(db)},sweepService:sweepServiceStatus(),marketSettings:marketSettings(db),priceHistory:db.hb9_price_history||[],marketReport:hb9MarketReport(db),supply:db.hb9_supply,reserveWallets:db.reserve_wallets||[],reserveLedger:db.reserve_ledger||[],burnLedger:db.burn_ledger||[],walletLedger:db.wallet_ledger||[],exchangeOrders:db.exchange_orders||[],exchangeReserve:exchangeReserveReport(db),incomeEmissions:db.income_emissions||[],solvency:solvencyReport(db),deposits:db.deposits,depositAddresses:db.deposit_addresses||[],blockchainTransactions:db.blockchain_transactions||[],sweepTransactions:db.sweep_transactions||[],auditLogs:db.auditLogs||[],adminFundTransfers:db.admin_fund_transfers||[],conversions:db.conversions||[],stakes:db.stakes,withdrawals:db.withdrawals,transfers:db.transfers||[],ledger:db.incomeLedger,referrals:db.referralLedger||[],levelIncomeLedger:db.level_income_ledger||[],salaryRanks:db.salary_ranks||[],salaryQualifications:db.salary_qualifications||[],salaryPayouts:db.salary_payouts||[],globals:db.globalTeamRecords,flushes:db.flushRecords,directBusinessAudit:db.directBusinessAudit||[],dailyRuns:db.dailyRuns||[],schedulerRuns:db.schedulerRuns||{},demoMode:DEMO_MODE});}
+      if(p==='/api/admin/overview'&&method==='GET'){let market=marketSettings(db),priceSource=null;try{const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});priceSource={source:priceInfo.source,price:priceInfo.price,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,fallbackUsed:priceInfo.fallbackUsed};market={...market,hb9BasePrice:priceInfo.price,hb9BuyPrice:priceInfo.buyPrice,hb9SellPrice:priceInfo.sellPrice,price:priceInfo.price,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,source:priceInfo.source,fallbackUsed:priceInfo.fallbackUsed};}catch(error){priceSource={source:'unavailable',price:null,buyPrice:null,sellPrice:null,fallbackUsed:false,error:error.message};}return send(res,200,{users:db.users.filter(x=>x.role==='user').map(x=>({...safeUser(x),summary:dashboard(db,x)})),settings:{...db.settings,hb9Price:priceSource.price,market},hb9PriceSource:priceSource,sweepService:sweepServiceStatus(),marketSettings:market,priceHistory:db.hb9_price_history||[],marketReport:hb9MarketReport(db),supply:db.hb9_supply,reserveWallets:db.reserve_wallets||[],reserveLedger:db.reserve_ledger||[],burnLedger:db.burn_ledger||[],walletLedger:db.wallet_ledger||[],exchangeOrders:db.exchange_orders||[],exchangeReserve:exchangeReserveReport(db),incomeEmissions:db.income_emissions||[],solvency:solvencyReport(db),deposits:db.deposits,depositAddresses:db.deposit_addresses||[],blockchainTransactions:db.blockchain_transactions||[],sweepTransactions:db.sweep_transactions||[],auditLogs:db.auditLogs||[],adminFundTransfers:db.admin_fund_transfers||[],conversions:db.conversions||[],stakes:db.stakes,withdrawals:db.withdrawals,transfers:db.transfers||[],ledger:db.incomeLedger,referrals:db.referralLedger||[],levelIncomeLedger:db.level_income_ledger||[],salaryRanks:db.salary_ranks||[],salaryQualifications:db.salary_qualifications||[],salaryPayouts:db.salary_payouts||[],globals:db.globalTeamRecords,flushes:db.flushRecords,directBusinessAudit:db.directBusinessAudit||[],dailyRuns:db.dailyRuns||[],schedulerRuns:db.schedulerRuns||{},demoMode:DEMO_MODE});}
       if(p==='/api/admin/reserve-wallets'&&method==='PUT'){const input=await body(req),asset=String(input.asset||'').toUpperCase(),walletType=String(input.walletType||''),balance=Number(input.balance);if(!['HB9','USDT','BNB'].includes(asset)||!walletType)return send(res,400,{error:'Valid asset and walletType are required'});if(!Number.isFinite(balance)||balance<0)return send(res,400,{error:'Reserve balance must be non-negative'});const wallet=reserveWallet(db,asset,walletType),old=wallet.balance;if(asset==='HB9'){const projected=roundCurrency(solvencyReport(db).accountedHb9-old+balance);if(projected>HB9_TOTAL_SUPPLY)return send(res,400,{error:'HB9 reserve adjustment exceeds fixed total supply'});}wallet.balance=roundCurrency(balance);wallet.updatedAt=new Date().toISOString();db.reserve_ledger.push({id:id('rsv'),asset,walletType,direction:'admin_set',amount:wallet.balance,balanceAfter:wallet.balance,reason:'Admin reserve adjustment',userId:u.id,createdAt:wallet.updatedAt,immutable:true});writeDB(db);return send(res,200,{message:'Reserve wallet updated',wallet,solvency:solvencyReport(db),exchangeReserve:exchangeReserveReport(db)});}
       if(p.startsWith('/api/admin/withdrawals/')&&p.endsWith('/reject')&&method==='POST'){const wd=db.withdrawals.find(x=>x.id===p.split('/')[4]);if(!wd||wd.status!=='pending')return send(res,400,{error:'Pending withdrawal not found'});wd.status='rejected';wd.rejectedAt=new Date().toISOString();wd.rejectedBy=u.id;walletEntry(db,{userId:wd.userId,asset:'USDT',direction:'unlock',amount:wd.amount,reason:'USDT withdrawal rejected',refId:wd.id});writeDB(db);return send(res,200,{message:'Withdrawal rejected and USDT unlocked',withdrawal:wd});}
       if(p.startsWith('/api/admin/withdrawals/')&&p.endsWith('/payout')&&method==='POST'){const wd=db.withdrawals.find(x=>x.id===p.split('/')[4]);if(!wd||wd.status!=='pending')return send(res,400,{error:'Pending withdrawal not found'});wd.status='approved';wd.paidAt=new Date().toISOString();wd.paidBy=u.id;walletEntry(db,{userId:wd.userId,asset:'USDT',direction:'payout',amount:wd.amount,reason:'USDT withdrawal payout',refId:wd.id});writeDB(db);return send(res,200,{message:'Withdrawal payout recorded',withdrawal:wd});}
@@ -1456,7 +1508,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/admin/deposits/search'&&method==='GET'){const q=String(url.searchParams.get('q')||'').toLowerCase(),userId=url.searchParams.get('userId');const records=(db.deposits||[]).filter(x=>(!userId||x.userId===userId)&&(!q||String(x.userId||'').toLowerCase().includes(q)||String(x.txHash||'').toLowerCase().includes(q)||String(x.sweepTxHash||'').toLowerCase().includes(q)||String(x.depositAddressId||'').toLowerCase().includes(q)||String((db.deposit_addresses||[]).find(a=>a.id===x.depositAddressId)?.address||'').toLowerCase().includes(q)));return send(res,200,{deposits:records});}
       if(p==='/api/admin/sweeps'&&method==='GET')return send(res,410,{error:'Treasury sweep flow is disabled for NOWPayments deposits'});
       if(p.startsWith('/api/admin/sweeps/')&&p.endsWith('/retry')&&method==='POST')return send(res,410,{error:'Treasury sweep flow is disabled for NOWPayments deposits'});
-      if(p==='/api/admin/settings'&&method==='PUT'){const input=await body(req); const allowed=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','hb9Price','fallbackPrice','priceOffset','spreadPercent','buyFeePercent','sellFeePercent','manualOverrideEnabled','minWithdrawal','withdrawalFeePercent','manualWithdrawalApproval','treasuryWalletBSC']; for(const k of allowed)if(input[k]!==undefined)db.settings[k]=input[k];db.settings.globalPointValue=0.02;delete db.settings.globalExtraPercent; const numeric=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','hb9Price','fallbackPrice','priceOffset','spreadPercent','buyFeePercent','sellFeePercent','minWithdrawal','withdrawalFeePercent']; if(!/^0x[a-fA-F0-9]{40}$/.test(String(db.settings.treasuryWalletBSC||'')))return send(res,400,{error:'Treasury wallet must be a valid EVM address'});if(numeric.some(k=>db.settings[k]!==undefined&&!Number.isFinite(Number(db.settings[k])))||db.settings.dailyRoi<1||db.settings.dailyRoi>4||db.settings.directMultiplier<1||db.settings.referralPercent<0||db.settings.referralPercent>100||db.settings.globalActivityMin<5||db.settings.globalActivityMax>15||db.settings.globalActivityMax<db.settings.globalActivityMin||Number(db.settings.fallbackPrice||db.settings.hb9Price)<=0||Number(db.settings.priceOffset)<0||db.settings.minWithdrawal<0||db.settings.withdrawalFeePercent<0||db.settings.withdrawalFeePercent>100)return send(res,400,{error:'Invalid settings. ROI must be 1-4%, referral percentage must be 0-100%, free Global Team must be 5-15, fallback price must be positive, and price offset must be non-negative.'}); numeric.forEach(k=>{if(db.settings[k]!==undefined)db.settings[k]=Number(db.settings[k])});if(input.fallbackPrice!==undefined||input.hb9Price!==undefined||input.priceOffset!==undefined||input.spreadPercent!==undefined||input.manualOverrideEnabled!==undefined||input.buyFeePercent!==undefined||input.sellFeePercent!==undefined){const result=setMarketSettings(db,{fallbackPrice:db.settings.fallbackPrice||db.settings.hb9Price,priceOffset:db.settings.priceOffset,spreadPercent:db.settings.spreadPercent,manualOverrideEnabled:db.settings.manualOverrideEnabled,buyFeePercent:db.settings.buyFeePercent,sellFeePercent:db.settings.sellFeePercent},u.id);if(result.error)return send(res,400,{error:result.error});}else db.settings.priceMode=marketSettings(db).manualOverrideEnabled?'manual_override':'icp_proxy';writeDB(db);return send(res,200,{message:'Settings saved',settings:{...db.settings,market:marketSettings(db)}});}
+      if(p==='/api/admin/settings'&&method==='PUT'){const input=await body(req); const allowed=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','minWithdrawal','withdrawalFeePercent','manualWithdrawalApproval','treasuryWalletBSC']; for(const k of allowed)if(input[k]!==undefined)db.settings[k]=input[k];db.settings.globalPointValue=0.02;delete db.settings.globalExtraPercent; const numeric=['dailyRoi','directMultiplier','referralPercent','globalActivityMin','globalActivityMax','minWithdrawal','withdrawalFeePercent']; if(!/^0x[a-fA-F0-9]{40}$/.test(String(db.settings.treasuryWalletBSC||'')))return send(res,400,{error:'Treasury wallet must be a valid EVM address'});if(numeric.some(k=>db.settings[k]!==undefined&&!Number.isFinite(Number(db.settings[k])))||db.settings.dailyRoi<1||db.settings.dailyRoi>4||db.settings.directMultiplier<1||db.settings.referralPercent<0||db.settings.referralPercent>100||db.settings.globalActivityMin<5||db.settings.globalActivityMax>15||db.settings.globalActivityMax<db.settings.globalActivityMin||db.settings.minWithdrawal<0||db.settings.withdrawalFeePercent<0||db.settings.withdrawalFeePercent>100)return send(res,400,{error:'Invalid settings. ROI must be 1-4%, referral percentage must be 0-100%, free Global Team must be 5-15, and withdrawal settings must be valid.'}); numeric.forEach(k=>{if(db.settings[k]!==undefined)db.settings[k]=Number(db.settings[k])});db.settings.priceMode=marketSettings(db).manualOverrideEnabled?'manual_override':'icp_proxy';writeDB(db);return send(res,200,{message:'Settings saved',settings:{...db.settings,market:marketSettings(db)}});}
       if(p==='/api/admin/demo/reset'&&method==='POST'){return send(res,404,{error:'Route not found'});}
       if(p==='/api/admin/daily-income/run'&&method==='POST'){return send(res,410,{error:'Daily Global Team and ROI are handled by the UTC scheduler.'});}
       if(p==='/api/admin/salary/run'&&method==='POST'){const summary=await processSalaryPayouts(db,today());if(summary.processedUsers===0)return send(res,409,{error:'Salary cycle already processed or no qualified users',summary});db.salaryRuns=db.salaryRuns||[];db.salaryRuns.push({id:id('srun'),adminId:u.id,adminName:u.name,...summary,createdAt:new Date().toISOString()});writeDB(db);return send(res,200,{message:'Salary payout run completed',summary});}
@@ -1468,5 +1520,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(routePath==='/'||routePath==='/exchange'||routePath==='/admin')?'/index.html':decodeURIComponent(routePath);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f),types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log('DAILY_SCHEDULER_UTC',{globalTeam:'17:30',roi:'18:00'});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};
+if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());try{const db=readDB(), priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:'17:30',roi:'18:00'});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,server};

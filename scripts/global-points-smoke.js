@@ -1,4 +1,5 @@
 const assert = require('assert');
+process.env.MARKET_TEST_MODE = 'true';
 const { accrueGlobalPoints, globalPointSummary } = require('../server');
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -7,8 +8,8 @@ const datePlus = (date, days) => { const d = new Date(`${date}T00:00:00.000Z`); 
 function db(users) {
   return {
     users,
-    settings: { globalActivityMin: 5, globalActivityMax: 15, dailyRoi: 2, directMultiplier: 2, fallbackPrice: 0.2 },
-    hb9_market_settings: { fallbackPrice: 0.2 },
+    settings: { globalActivityMin: 5, globalActivityMax: 15, dailyRoi: 2, directMultiplier: 2, fallbackPrice: null },
+    hb9_market_settings: { fallbackPrice: null },
     directBusiness: [],
     deposits: [],
     stakes: [],

@@ -4,7 +4,7 @@ process.env.DATA_FILE = require('path').join(require('os').tmpdir(), `hb9-conver
 
 const assert = require('assert');
 const fs = require('fs');
-const { server, readDB, writeDB } = require('../server');
+const { server, readDB, writeDB, hb9PriceSource } = require('../server');
 
 function request(base, path, { method = 'GET', token, body } = {}) {
   return fetch(`${base}${path}`, {
@@ -34,12 +34,12 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   const user = db.users.find(item => item.email === 'convert@example.com');
   db.deposits.push({ id: 'dep_convert_api', userId: user.id, amount: 1000, status: 'approved', createdAt: new Date().toISOString() });
   db.settings.exchangeEnabled = true;
-  db.settings.hb9Price = 0.2;
-  db.settings.fallbackPrice = 0.2;
+  db.settings.hb9Price = 0.19;
+  db.settings.fallbackPrice = 0.19;
   db.settings.priceOffset = 0;
   db.settings.buyFeePercent = 0;
   db.settings.tradingFeePercent = 0;
-  db.hb9_market_settings = { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0, manualOverrideEnabled: true };
+  db.hb9_market_settings = { fallbackPrice: 0.19, priceOffset: 0, spreadPercent: 0, manualOverrideEnabled: false };
   db.reserve_wallets = [
     { asset: 'HB9', walletType: 'exchange', balance: 1000000, lockedBalance: 0 },
     { asset: 'HB9', walletType: 'income', balance: 1000000, lockedBalance: 0 },
@@ -47,6 +47,7 @@ function request(base, path, { method = 'GET', token, body } = {}) {
     { asset: 'BNB', walletType: 'exchange', balance: 1000, lockedBalance: 0 }
   ];
   writeDB(db);
+  const hb9Price = await hb9PriceSource(db);
 
   const login = await request(base, '/api/auth/login', {
     method: 'POST',
@@ -57,13 +58,13 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   const hb9 = await request(base, '/api/convert', {
     method: 'POST',
     token,
-    body: { fromAsset: 'USDT', toAsset: 'HB9', amount: 100, clientRequestId: 'api-hb9-convert' }
+    body: { fromAsset: 'USDT', toAsset: 'HB9', amount: 225, clientRequestId: 'api-hb9-convert' }
   });
   assert.strictEqual(hb9.order.toAsset, 'HB9');
   assert.strictEqual(hb9.conversion.toAsset, 'HB9');
-  assert.strictEqual(hb9.balance.usdt, 900);
-  assert.strictEqual(hb9.balance.hb9, 500);
-  assert.strictEqual(hb9.order.price, 0.2);
+  assert.strictEqual(hb9.balance.usdt, 775);
+  assert.strictEqual(hb9.balance.hb9, 100);
+  assert.strictEqual(hb9.order.price, hb9Price.buyPrice);
   assert.strictEqual(hb9.order.reinvestAmountHb9, undefined, 'USDT -> HB9 must not apply auto reinvest');
   assert.strictEqual(readDB().stakes.filter(item => item.source === 'AUTO_REINVEST_FROM_CONVERSION').length, 0, 'USDT -> HB9 must not create auto reinvest stake');
 
@@ -79,10 +80,10 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   assert.strictEqual(hb9Sell.order.reinvestAmountHb9, 20);
   assert.strictEqual(hb9Sell.order.convertedAmountHb9, 80);
   assert.strictEqual(hb9Sell.order.hb9Amount, 80);
-  assert.strictEqual(hb9Sell.order.toAmount, 16);
-  assert.strictEqual(hb9Sell.order.price, 0.2, 'Backend must price HB9 -> USDT without trusting frontend price');
-  assert.strictEqual(hb9Sell.balance.usdt, 916);
-  assert.strictEqual(hb9Sell.balance.hb9, 400);
+  assert.strictEqual(hb9Sell.order.toAmount, 180);
+  assert.strictEqual(hb9Sell.order.price, hb9Price.buyPrice, 'Backend must price HB9 -> USDT without trusting frontend price');
+  assert.strictEqual(hb9Sell.balance.usdt, 955);
+  assert.strictEqual(hb9Sell.balance.hb9, 0);
   let afterSellDb = readDB();
   const autoStake = afterSellDb.stakes.find(item => item.source === 'AUTO_REINVEST_FROM_CONVERSION' && item.relatedConversionId === hb9Sell.conversion.id);
   assert(autoStake, 'HB9 -> USDT must create auto reinvest stake');
@@ -90,7 +91,7 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   assert.strictEqual(autoStake.stakeAmount, 20);
   assert.strictEqual(autoStake.status, 'active');
   assert(afterSellDb.wallet_ledger.some(item => item.refId === hb9Sell.order.id && item.asset === 'HB9' && item.direction === 'debit' && item.amount === 100), 'HB9 -> USDT debits full HB9 amount');
-  assert(afterSellDb.wallet_ledger.some(item => item.refId === hb9Sell.order.id && item.asset === 'USDT' && item.direction === 'credit' && item.amount === 16), 'HB9 -> USDT credits only 80% value as USDT');
+  assert(afterSellDb.wallet_ledger.some(item => item.refId === hb9Sell.order.id && item.asset === 'USDT' && item.direction === 'credit' && item.amount === 180), 'HB9 -> USDT credits only 80% value as USDT');
   const beforeSellRetry = afterSellDb.wallet_ledger.length;
   const beforeStakeRetry = afterSellDb.stakes.length;
   const hb9SellRetry = await request(base, '/api/convert', {
@@ -110,7 +111,7 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   assert.strictEqual(tinyBnb.order.toAsset, 'BNB');
   assert.strictEqual(tinyBnb.order.toAmount, 0.00083333);
   assert.strictEqual(tinyBnb.order.bnbAmount, 0.00083333);
-  assert.strictEqual(tinyBnb.balance.usdt, 915.5);
+  assert.strictEqual(tinyBnb.balance.usdt, 954.5);
   assert.strictEqual(tinyBnb.balance.bnb, 0.00083333);
   assert(readDB().wallet_ledger.some(item => item.refId === tinyBnb.order.id && item.asset === 'BNB' && item.amount === 0.00083333), 'BNB ledger credit uses decimal amount');
 
@@ -121,18 +122,18 @@ function request(base, path, { method = 'GET', token, body } = {}) {
   });
   assert.strictEqual(bnb.order.toAsset, 'BNB');
   assert.strictEqual(bnb.conversion.toAsset, 'BNB');
-  assert.strictEqual(bnb.balance.usdt, 315.5);
+  assert.strictEqual(bnb.balance.usdt, 354.5);
   assert.strictEqual(bnb.balance.bnb, 1.00083333);
 
   const dashboard = await request(base, '/api/dashboard', { token });
-  assert.strictEqual(dashboard.wallets.usdt, 315.5);
-  assert.strictEqual(dashboard.wallets.hb9, 400);
+  assert.strictEqual(dashboard.wallets.usdt, 354.5);
+  assert.strictEqual(dashboard.wallets.hb9, 0);
   assert.strictEqual(dashboard.wallets.bnb, 1.00083333);
   assert(dashboard.stakes.some(item => item.source === 'AUTO_REINVEST_FROM_CONVERSION' && item.stakeAmount === 20), 'Dashboard/My Staking exposes auto reinvest stake');
   assert.strictEqual(dashboard.conversions.length, 4);
   assert(dashboard.conversions.some(item => item.toAsset === 'BNB' && item.toAmount === 1), 'Conversion history exposes BNB toAmount');
   assert(dashboard.conversions.some(item => item.toAsset === 'BNB' && item.toAmount === 0.00083333), 'Conversion history exposes tiny BNB decimal received amount');
-  assert(dashboard.conversions.some(item => item.fromAsset === 'HB9' && item.toAsset === 'USDT' && item.fromAmount === 100 && item.reinvestAmountHb9 === 20 && item.convertedAmountHb9 === 80 && item.toAmount === 16), 'Conversion history exposes HB9 -> USDT reinvest split');
+  assert(dashboard.conversions.some(item => item.fromAsset === 'HB9' && item.toAsset === 'USDT' && item.fromAmount === 100 && item.reinvestAmountHb9 === 20 && item.convertedAmountHb9 === 80 && item.toAmount === 180), 'Conversion history exposes HB9 -> USDT reinvest split');
 
   const diagnostic = await request(base, `/api/admin/diagnostics/bnb-wallet?userId=${user.id}`, { token });
   assert.strictEqual(diagnostic.asset, 'BNB');

@@ -8,6 +8,7 @@ const {
   convertUsdtToAsset,
   createStake,
   dashboard,
+  hb9PriceSource,
   repairBnbConversionPrecision,
   walletBalances
 } = require('../server');
@@ -62,15 +63,15 @@ function dbFixture() {
     burn_ledger: [],
     hb9_supply: { totalSupply: 1000000000, burned: 0 },
     hb9_market_settings: {
-      fallbackPrice: 0.2,
+      fallbackPrice: 0.19,
       priceOffset: 0,
       spreadPercent: 0,
-      manualOverrideEnabled: true
+      manualOverrideEnabled: false
     },
     settings: {
       exchangeEnabled: true,
-      fallbackPrice: 0.2,
-      hb9Price: 0.2,
+      fallbackPrice: 0.19,
+      hb9Price: 0.19,
       priceOffset: 0,
       buyFeePercent: 0,
       sellFeePercent: 0,
@@ -87,19 +88,20 @@ function dbFixture() {
   const db = dbFixture();
   const user = db.users.find(x => x.role === 'user');
   const admin = db.users.find(x => x.role === 'admin');
+  const hb9Price = await hb9PriceSource(db);
 
-  const hb9Buy = await convertUsdtToAsset(db, user, { amount: 100, toAsset: 'HB9', clientRequestId: 'hb9-buy-1' });
+  const hb9Buy = await convertUsdtToAsset(db, user, { amount: 450, toAsset: 'HB9', clientRequestId: 'hb9-buy-1' });
   assert.strictEqual(hb9Buy.order.toAsset, 'HB9');
   assert.strictEqual(hb9Buy.order.fromAsset, 'USDT');
-  assert.strictEqual(hb9Buy.order.toAmount, 500);
+  assert.strictEqual(hb9Buy.order.toAmount, 200);
   assert.strictEqual(hb9Buy.conversion.toAsset, 'HB9');
-  assert.strictEqual(hb9Buy.balance.usdt, 900);
-  assert.strictEqual(walletBalances(db, user.id).hb9, 500);
+  assert.strictEqual(hb9Buy.balance.usdt, 550);
+  assert.strictEqual(walletBalances(db, user.id).hb9, 200);
   assert(db.wallet_ledger.some(x => x.refId === hb9Buy.order.id && x.asset === 'USDT' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === hb9Buy.order.id && x.asset === 'HB9' && x.direction === 'credit'));
 
   const beforeRetryLedger = db.wallet_ledger.length;
-  const retry = await convertUsdtToAsset(db, user, { amount: 100, toAsset: 'HB9', clientRequestId: 'hb9-buy-1' });
+  const retry = await convertUsdtToAsset(db, user, { amount: 450, toAsset: 'HB9', clientRequestId: 'hb9-buy-1' });
   assert.strictEqual(retry.order.id, hb9Buy.order.id);
   assert.strictEqual(db.wallet_ledger.length, beforeRetryLedger);
 
@@ -109,10 +111,10 @@ function dbFixture() {
   assert.strictEqual(hb9Sell.order.direction, 'sell');
   assert.strictEqual(hb9Sell.order.reinvestAmountHb9, 20);
   assert.strictEqual(hb9Sell.order.convertedAmountHb9, 80);
-  assert.strictEqual(hb9Sell.order.toAmount, 16);
-  assert.strictEqual(hb9Sell.order.price, 0.2, 'server-side HB9 price is used instead of frontend price');
-  assert.strictEqual(hb9Sell.balance.usdt, 916);
-  assert.strictEqual(hb9Sell.balance.hb9, 400);
+  assert.strictEqual(hb9Sell.order.toAmount, 180);
+  assert.strictEqual(hb9Sell.order.price, hb9Price.buyPrice, 'server-side HB9 price is used instead of frontend price');
+  assert.strictEqual(hb9Sell.balance.usdt, 730);
+  assert.strictEqual(hb9Sell.balance.hb9, 100);
   assert(db.stakes.some(x => x.source === 'AUTO_REINVEST_FROM_CONVERSION' && x.stakeAmount === 20 && x.relatedConversionId === hb9Sell.conversion.id));
   assert(db.wallet_ledger.some(x => x.refId === hb9Sell.order.id && x.asset === 'HB9' && x.direction === 'debit'));
   assert(db.wallet_ledger.some(x => x.refId === hb9Sell.order.id && x.asset === 'USDT' && x.direction === 'credit'));
@@ -127,7 +129,7 @@ function dbFixture() {
   assert.strictEqual(tinyBnbBuy.order.toAsset, 'BNB');
   assert.strictEqual(tinyBnbBuy.order.toAmount, 0.00083333);
   assert.strictEqual(tinyBnbBuy.order.bnbAmount, 0.00083333);
-  assert.strictEqual(tinyBnbBuy.balance.usdt, 915.5);
+  assert.strictEqual(tinyBnbBuy.balance.usdt, 729.5);
   assert.strictEqual(tinyBnbBuy.balance.bnb, 0.00083333);
   assert(db.wallet_ledger.some(x => x.refId === tinyBnbBuy.order.id && x.asset === 'BNB' && x.direction === 'credit' && x.amount === 0.00083333));
 
@@ -135,7 +137,7 @@ function dbFixture() {
   assert.strictEqual(bnbBuy.order.toAsset, 'BNB');
   assert.strictEqual(bnbBuy.order.toAmount, 1);
   assert.strictEqual(bnbBuy.conversion.toAsset, 'BNB');
-  assert.strictEqual(bnbBuy.balance.usdt, 315.5);
+  assert.strictEqual(bnbBuy.balance.usdt, 129.5);
   assert.strictEqual(walletBalances(db, user.id).bnb, 1.00083333);
   assert.strictEqual(dashboard(db, user).wallets.bnb, 1.00083333);
   assert.strictEqual(dashboard(db, user).conversions.length, 4);
@@ -150,13 +152,13 @@ function dbFixture() {
   const hb9Stake = await createStake(db, user, { amount: 100, stakeAsset: 'HB9' });
   assert.strictEqual(hb9Stake.stakeAsset, 'HB9');
   assert.strictEqual(hb9Stake.hb9EquivalentAmount, 100);
-  assert.strictEqual(walletBalances(db, user.id).hb9, 300);
+  assert.strictEqual(walletBalances(db, user.id).hb9, 0);
 
   const bnbStake = await createStake(db, user, { amount: 0.5, stakeAsset: 'BNB', clientRequestId: 'bnb-stake-1' });
   assert.strictEqual(bnbStake.stakeAsset, 'BNB');
   assert.strictEqual(bnbStake.bnbPriceAtStake, 600);
   assert.strictEqual(bnbStake.stakeUsdValue, 300);
-  assert.strictEqual(bnbStake.hb9EquivalentAmount, 1500);
+  assert.strictEqual(bnbStake.hb9EquivalentAmount, 133.33);
   assert.strictEqual(walletBalances(db, user.id).bnb, 0.50083333);
   const beforeStakeRetryLedger = db.wallet_ledger.length;
   const bnbStakeRetry = await createStake(db, user, { amount: 0.5, stakeAsset: 'BNB', clientRequestId: 'bnb-stake-1' });
@@ -164,8 +166,8 @@ function dbFixture() {
   assert.strictEqual(db.wallet_ledger.length, beforeStakeRetryLedger);
 
   const summary = dashboard(db, user);
-  assert.strictEqual(summary.stats.activeStakeHb9, 1620);
-  assert.strictEqual(summary.stats.activeStake, 324);
+  assert.strictEqual(summary.stats.activeStakeHb9, 253.33);
+  assert.strictEqual(summary.stats.activeStake, 570);
   assert.notStrictEqual(summary.stats.activeStakeHb9, 100.5);
 
   await assert.rejects(

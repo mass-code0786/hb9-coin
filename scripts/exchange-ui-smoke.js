@@ -109,10 +109,10 @@ function createContext(options = {}) {
     pages: {},
     data: {
       wallets: { usdt: 1000, hb9: 50, bnb: 0.00083333 },
-      settings: { hb9Price: 0.2, market: { fallbackPrice: 0.2, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
+      settings: { hb9Price: 2.25, market: { fallbackPrice: 2.25, priceOffset: 0, spreadPercent: 0 }, lockDays: 15 },
       conversions: [
         { id: 'cnv_bnb_ui', fromAsset: 'USDT', toAsset: 'BNB', fromAmount: 0.5, toAmount: 0.0008971184, price: 557.33, status: 'completed', createdAt: '2026-06-28T10:00:00.000Z' },
-        { id: 'cnv_hb9_sell_ui', fromAsset: 'HB9', toAsset: 'USDT', fromAmount: 100, reinvestAmountHb9: 20, convertedAmountHb9: 80, toAmount: 16, price: 0.2, status: 'completed', createdAt: '2026-06-28T10:02:00.000Z' },
+        { id: 'cnv_hb9_sell_ui', fromAsset: 'HB9', toAsset: 'USDT', fromAmount: 100, reinvestAmountHb9: 20, convertedAmountHb9: 80, toAmount: 180, price: 2.25, status: 'completed', createdAt: '2026-06-28T10:02:00.000Z' },
         { id: 'cnv_hb9_ui', fromAsset: 'USDT', toAsset: 'HB9', fromAmount: 1, toAmount: 0.444444, price: 2.25, status: 'completed', createdAt: '2026-06-28T10:01:00.000Z' }
       ],
       stakes: []
@@ -144,7 +144,7 @@ function createContext(options = {}) {
       }
       return Promise.resolve(endpoint.includes('bnb')
         ? { source: 'binance', price: 600 }
-        : { source: 'icp_proxy', hb9BasePrice: 0.2, hb9BuyPrice: 0.2 });
+        : { source: 'icp_proxy', hb9BasePrice: 2.25, hb9BuyPrice: 2.25 });
     },
     money: value => `$${Number(value || 0).toFixed(2)}`,
     points: value => String(Number(value || 0)),
@@ -246,7 +246,7 @@ async function tick() {
   assert(historyHtml.includes('0.4444 HB9'), 'HB9 history formats received amount compactly');
   assert(historyHtml.includes('Auto Reinvest'), 'HB9 sell history shows auto reinvest split');
   assert(historyHtml.includes('20 HB9'), 'HB9 sell history formats auto reinvest amount');
-  assert(historyHtml.includes('16.00 USDT'), 'HB9 sell history formats 80 percent USDT received amount');
+  assert(historyHtml.includes('180.00 USDT'), 'HB9 sell history formats 80 percent USDT received amount');
   assert(!/bnb-token-badge|hb9-coin-logo|<img|<svg/.test(historyHtml), 'HB9 conversion history rows do not render token logos');
   assert(!context.page.innerHTML.includes('BNB Wallet'), 'HB9 mode does not render BNB wallet card');
   assert.strictEqual(context.__widgets.at(-1).symbol, 'BINANCE:ICPUSDT', 'HB9 chart widget uses existing ICP proxy');
@@ -270,7 +270,7 @@ async function tick() {
   assert(context.page.innerHTML.includes('<button class="primary swap-submit">Convert</button>'), 'reversed swap submit button renders');
   context.page.elements.form.elements.swapAmount.value = '5';
   context.page.elements.form.elements.swapAmount.oninput();
-  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '0.80 USDT', 'reversed swap receive amount previews 80 percent conversion');
+  assert.strictEqual(context.page.elements.form.elements.swapOutput.value, '9.00 USDT', 'reversed swap receive amount previews 80 percent conversion');
   assert(context.page.innerHTML.includes('data-swap-preview'), 'reversed swap renders split preview container');
   assert(context.page.elements.form.elements.swapOutput.value !== '1.00 USDT', 'reversed swap no longer previews 100 percent conversion');
   await context.page.elements.form.onsubmit({ preventDefault() {}, submitter: new FakeElement() });
@@ -302,7 +302,7 @@ async function tick() {
   delayedHb9.page.elements.assetButtons[1].onclick();
   assert(delayedHb9.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB selected while old HB9 request is pending');
   const oldHb9 = delayedHb9.__pendingApi.find(item => item.endpoint === '/api/market/hb9-ticker');
-  oldHb9.resolve({ source: 'icp_proxy', hb9BasePrice: 0.2, hb9BuyPrice: 0.2 });
+  oldHb9.resolve({ source: 'icp_proxy', hb9BasePrice: 2.25, hb9BuyPrice: 2.25 });
   await tick();
   assert.notStrictEqual(delayedHb9.page.elements.marketPair.textContent, 'HB9USDT', 'old delayed HB9 response cannot overwrite BNB pair');
   assert(delayedHb9.page.innerHTML.includes('data-selected-pair="BNBUSDT"'), 'BNB pair remains selected after old HB9 response');
