@@ -1,6 +1,8 @@
 const assert = require('assert');
 process.env.MARKET_TEST_MODE = 'true';
-const { adminFundTransfer, walletBalances } = require('../server');
+const fs = require('fs');
+const path = require('path');
+const { adminFundTransfer, dashboard, walletBalances } = require('../server');
 
 function store() {
   const now = new Date().toISOString();
@@ -81,9 +83,6 @@ assert.strictEqual((db.auditLogs || []).filter(item => item.type === 'ADMIN_FUND
 assert.strictEqual((db.admin_fund_transfers || []).length, 3, 'successful transfers are reportable');
 assert.deepStrictEqual(walletBalances(db, 'usr_user'), { usdt: 40, withdrawableUsdt: 40, hb9: 25, bnb: 0, totalDeposit: 0 }, 'wallet balances include admin fund transfers');
 
-const incomeReserve = db.reserve_wallets.find(item => item.asset === 'HB9' && item.walletType === 'income');
-if (incomeReserve) incomeReserve.balance = 100000;
-else db.reserve_wallets.push({ asset: 'HB9', walletType: 'income', balance: 100000, lockedBalance: 0 });
 adminFundTransfer(db, admin, { userId: 'usr_user', asset: 'HB9', action: 'credit', amount: 100, reason: 'Stakeable admin HB9 credit' });
 assert.strictEqual(db.referralLedger.length, 0, 'admin transfer itself must not pay referral income');
 
@@ -94,11 +93,33 @@ assert.strictEqual(db.referralLedger[0].sponsorId, 'usr_sponsor');
 assert.strictEqual(db.referralLedger[0].referredUserId, 'usr_user');
 assert.strictEqual(db.referralLedger[0].stakeId, stake.id);
 assert.strictEqual(db.referralLedger[0].referralPercent, 10);
+assert.strictEqual(db.referralLedger[0].status, 'credited');
 assert.strictEqual(db.referralLedger[0].referralUsdAmount, 22.5);
 assert.strictEqual(db.referralLedger[0].referralHb9Amount, 10);
 assert.strictEqual(walletBalances(db, 'usr_sponsor').hb9, 10, 'sponsor wallet receives credited referral HB9');
 assert.strictEqual(db.directBusiness.filter(item => item.userId === 'usr_sponsor' && item.sourceUserId === 'usr_user' && item.stakeId === stake.id).length, 1, 'stake records sponsor direct business once');
 assert.strictEqual(db.directBusiness.find(item => item.stakeId === stake.id).amount, 225, 'direct business uses stake USD value');
+assert.strictEqual(db.level_income_ledger.length, 1, 'first stake executes level income path');
+assert.strictEqual(db.level_income_ledger[0].stakeId, stake.id, 'level income row is tied to admin-funded stake');
+assert.strictEqual(db.income_emissions.filter(item => item.type === 'REFERRAL_INCOME' && item.userId === 'usr_sponsor').length, 1, 'referral income emission history is written');
+
+const sponsorDashboard = dashboard(db, db.users.find(user => user.id === 'usr_sponsor'));
+assert.strictEqual(sponsorDashboard.income.totalReferral, 10, 'sponsor dashboard total referral updates after admin-funded stake');
+assert.strictEqual(sponsorDashboard.income.todayReferral, 10, 'sponsor dashboard today referral updates after admin-funded stake');
+assert.strictEqual(sponsorDashboard.stats.directBusiness, 225, 'sponsor dashboard direct business updates after admin-funded stake');
+const fundedMember = sponsorDashboard.team.find(member => member.id === 'usr_user');
+assert(fundedMember, 'dashboard team includes admin-funded staking member');
+assert.strictEqual(fundedMember.stakeAsset, 'HB9', 'team member stake asset updates');
+assert.strictEqual(fundedMember.stakeAmount, 100, 'team member stake amount updates');
+assert.strictEqual(fundedMember.totalInvestmentUsd, 225, 'team member total investment updates');
+assert.strictEqual(fundedMember.activeStakeUsd, 225, 'team member active stake updates');
+assert.strictEqual(fundedMember.hb9EquivalentAmount, 100, 'team member HB9 equivalent updates');
+assert.strictEqual(fundedMember.lastStakeDate, stake.startDate, 'team member last stake date updates');
+
+const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'latin1');
+for (const label of ['Status', 'Join Date', 'Stake Asset', 'Stake Amount', 'Investment (USD)', 'Total Investment', 'HB9 Equivalent', "Today's Income", 'Total Income', 'Last Stake Date']) {
+  assert(app.includes(label), `Team page must label ${label}`);
+}
 
 const referralCount = db.referralLedger.length;
 const businessCount = db.directBusiness.length;

@@ -50,6 +50,9 @@ assert.strictEqual(report.levels[2].members[0].stakeAsset, 'BNB', 'BNB stake ass
 assert.strictEqual(report.levels[2].members[0].hb9EquivalentAmount, 133.33, 'BNB stake HB9 equivalent is counted');
 assert.strictEqual(report.levels[2].members[0].totalStakeAmount, 0.5, 'BNB original stake amount is reported');
 assert.strictEqual(report.levels[0].members[0].activeStake, 100, 'active stake USD is reported per member');
+assert.strictEqual(report.levels[2].members[0].lastStakeDate, '2026-06-04', 'last stake date is reported per member');
+assert.strictEqual(report.levels[2].members[0].todayIncome, 0, 'today income field is present per member');
+assert.strictEqual(report.levels[2].members[0].totalIncome, 0, 'total income field is present per member');
 assert.strictEqual(report.summary.totalInvestmentUsd, 465, 'investment totals include active and inactive stakes');
 assert.strictEqual(report.summary.totalHb9Equivalent, 213.33, 'HB9 equivalent totals include BNB-derived equivalent');
 assert(!report.levels.some(level => level.members.some(member => member.userId === 'usr_root')), 'visited guard prevents loop duplicate root user');
@@ -60,6 +63,9 @@ assert(app.includes("api('/api/team/levels')"), 'Team page fetches level team AP
 assert(app.includes('Level Team') && app.includes('Total Team') && app.includes('HB9 Equivalent'), 'Team page renders summary labels');
 assert(app.includes('levels.map(levelCard).join') && app.includes('team-level-card'), 'Team page renders all returned level cards');
 assert(app.includes('member.totalInvestmentUsd') && app.includes('member.activeStake') && app.includes('member.stakeAsset'), 'Team page renders required member investment fields');
+for (const label of ['Status', 'Join Date', 'Stake Asset', 'Stake Amount', 'Investment (USD)', 'Total Investment', 'HB9 Equivalent', "Today's Income", 'Total Income', 'Last Stake Date']) {
+  assert(app.includes(label), `Team page renders ${label} label`);
+}
 assert(css.includes('.team-level-card') && css.includes('@media(max-width:800px)') && css.includes('overflow-wrap:anywhere'), 'mobile level team CSS exists without horizontal overflow');
 
 function request(port, requestPath, { method = 'GET', token = null, body = null } = {}) {
