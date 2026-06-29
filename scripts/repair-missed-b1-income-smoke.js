@@ -74,15 +74,30 @@ function runRepair(extraEnv = {}) {
   return result.stdout;
 }
 
+function parseSummary(output) {
+  const start = output.lastIndexOf('{\n  "date"');
+  assert(start >= 0, 'repair output should end with JSON summary');
+  return JSON.parse(output.slice(start));
+}
+
 try {
   fs.writeFileSync(dataFile, JSON.stringify(fixture(), null, 2));
   const beforeDry = fs.readFileSync(dataFile, 'utf8');
   const dryOutput = runRepair({ DRY_RUN: 'true' });
+  const drySummary = parseSummary(dryOutput);
   assert(dryOutput.includes('B1_REPAIR_DRY_RUN'), 'dry run log should be printed');
+  assert.strictEqual(drySummary.missingB1Rows, 2, 'dry run should identify real missing B1 rows');
+  assert.strictEqual(drySummary.createdRows, 2, 'dry run createdRows should show rows that would be created');
+  assert.strictEqual(drySummary.actualCreatedRows, 0, 'dry run should not actually create rows');
+  assert.strictEqual(drySummary.skippedReasons['already exists'], 1, 'dry run should explain existing rows');
+  assert.strictEqual(drySummary.skippedReasons['not eligible'], 1, 'dry run should explain inactive/not eligible stakes');
   assert.strictEqual(fs.readFileSync(dataFile, 'utf8'), beforeDry, 'dry run creates nothing');
 
   const realOutput = runRepair();
+  const realSummary = parseSummary(realOutput);
   assert(realOutput.includes('B1_REPAIR_CREATED'), 'real run should create missing B1');
+  assert.strictEqual(realSummary.createdRows, 2, 'real run should report created rows');
+  assert.strictEqual(realSummary.actualCreatedRows, 2, 'real run should actually insert created rows');
   let db = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
   const repaired = db.incomeLedger.filter(item => item.date === yesterday && item.type === 'B1_INCOME' && item.userId === 'usr_missing');
   assert.strictEqual(repaired.length, 1, 'missing yesterday B1 is repaired once');
@@ -96,7 +111,10 @@ try {
 
   const countAfterReal = db.incomeLedger.length;
   const rerunOutput = runRepair();
+  const rerunSummary = parseSummary(rerunOutput);
   assert(rerunOutput.includes('B1_REPAIR_SKIPPED_DUPLICATE'), 'rerun should log duplicate skips');
+  assert.strictEqual(rerunSummary.createdRows, 0, 'rerun should not plan new rows');
+  assert.strictEqual(rerunSummary.skippedReasons['already exists'], 3, 'rerun should explain all existing yesterday rows');
   db = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
   assert.strictEqual(db.incomeLedger.length, countAfterReal, 'running repair twice does not duplicate income');
   assert(db.auditLogs.some(item => item.type === 'B1_REPAIR_COMPLETED'), 'completion log is stored');

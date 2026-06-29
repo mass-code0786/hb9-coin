@@ -52,6 +52,12 @@ function hasDuplicate(db, userId, stakeId, date) {
   );
 }
 
+function skip(summary, db, reason, details = {}) {
+  summary.skippedReasons[reason] = (summary.skippedReasons[reason] || 0) + 1;
+  if (reason === 'already exists' || reason === 'duplicate') summary.skippedDuplicates++;
+  log(db, 'B1_REPAIR_SKIPPED_ROW', { reason, ...details });
+}
+
 function createB1(db, { user, stake, date, hb9Price, hb9Amount, usdAmount }) {
   const createdAt = new Date().toISOString();
   const incomeKey = `${user.id}:${stake.id}:${date}:B1`;
@@ -76,32 +82,61 @@ async function main() {
   db.stakes = db.stakes || [];
   const activeStakes = db.stakes.filter(stake => stake.status === 'active');
   const price = Number((await hb9PriceSource(db, { interval: '1d', limit: 1 })).price);
-  const summary = { date: targetDate, dryRun, eligibleUsers: 0, missingB1Rows: 0, createdRows: 0, skippedDuplicates: 0, totalHb9Credited: 0 };
+  const summary = { date: targetDate, dryRun, eligibleUsers: 0, missingB1Rows: 0, createdRows: 0, actualCreatedRows: 0, skippedDuplicates: 0, totalHb9Credited: 0, skippedReasons: {} };
   const eligibleUsers = new Set();
+  const seenKeys = new Set();
   log(db, 'B1_REPAIR_STARTED', { date: targetDate, activeStakes: activeStakes.length, dryRun });
   if (dryRun) log(db, 'B1_REPAIR_DRY_RUN', { date: targetDate });
 
-  for (const stake of activeStakes) {
+  for (const stake of db.stakes) {
     const user = (db.users || []).find(item => item.id === stake.userId);
-    if (!user || user.role !== 'user') continue;
+    if (!stake?.id) {
+      skip(summary, db, 'missing stake', { stakeId: stake?.id || null, userId: stake?.userId || null, date: targetDate });
+      continue;
+    }
+    if (stake.status !== 'active') {
+      skip(summary, db, 'not eligible', { userId: stake.userId || null, stakeId: stake.id, date: targetDate, detail: `stake status is ${stake.status || 'missing'}` });
+      continue;
+    }
+    if (!user || user.role !== 'user') {
+      skip(summary, db, 'failed validation', { userId: stake.userId, stakeId: stake.id, date: targetDate, detail: user ? 'not a user role' : 'user not found' });
+      continue;
+    }
     const userActiveStakeUsd = activeStakeUsd(db, user.id);
     const requiredBusiness = round(userActiveStakeUsd * (Number(db.settings?.directMultiplier) || 2));
-    if (!userActiveStakeUsd || directBusiness(db, user.id) < requiredBusiness) continue;
+    const userDirectBusiness = directBusiness(db, user.id);
+    if (!userActiveStakeUsd || userDirectBusiness < requiredBusiness) {
+      skip(summary, db, 'not eligible', { userId: user.id, stakeId: stake.id, date: targetDate, activeStakeUsd: userActiveStakeUsd, directBusinessUsd: userDirectBusiness, requiredBusinessUsd: requiredBusiness });
+      continue;
+    }
     eligibleUsers.add(user.id);
-    if (hasDuplicate(db, user.id, stake.id, targetDate)) {
-      summary.skippedDuplicates++;
+    const incomeKey = `${user.id}:${stake.id}:${targetDate}:B1`;
+    if (seenKeys.has(incomeKey)) {
       log(db, 'B1_REPAIR_SKIPPED_DUPLICATE', { userId: user.id, stakeId: stake.id, date: targetDate });
+      skip(summary, db, 'duplicate', { userId: user.id, stakeId: stake.id, date: targetDate, incomeKey });
+      continue;
+    }
+    seenKeys.add(incomeKey);
+    if (hasDuplicate(db, user.id, stake.id, targetDate)) {
+      log(db, 'B1_REPAIR_SKIPPED_DUPLICATE', { userId: user.id, stakeId: stake.id, date: targetDate });
+      skip(summary, db, 'already exists', { userId: user.id, stakeId: stake.id, date: targetDate });
       continue;
     }
     const usdAmount = round(stakeUsd(stake) * (Number(db.settings?.dailyRoi) || 0) / 100);
     const hb9Amount = price > 0 ? round(usdAmount / price) : 0;
-    if (hb9Amount <= 0) continue;
+    if (hb9Amount <= 0) {
+      skip(summary, db, 'zero amount', { userId: user.id, stakeId: stake.id, date: targetDate, usdAmount, hb9Amount, hb9Price: price });
+      continue;
+    }
     summary.missingB1Rows++;
+    summary.createdRows++;
+    summary.totalHb9Credited = round(summary.totalHb9Credited + hb9Amount);
     if (!dryRun) {
       const ledgerId = createB1(db, { user, stake, date: targetDate, hb9Price: price, hb9Amount, usdAmount });
-      summary.createdRows++;
-      summary.totalHb9Credited = round(summary.totalHb9Credited + hb9Amount);
+      summary.actualCreatedRows++;
       log(db, 'B1_REPAIR_CREATED', { userId: user.id, stakeId: stake.id, ledgerId, date: targetDate, hb9Amount, usdAmount });
+    } else {
+      log(db, 'B1_REPAIR_WOULD_CREATE', { userId: user.id, stakeId: stake.id, date: targetDate, hb9Amount, usdAmount });
     }
   }
 
