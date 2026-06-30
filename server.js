@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 console.log({
   cwd: process.cwd(),
   dirname: __dirname,
