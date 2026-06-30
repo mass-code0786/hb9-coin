@@ -180,6 +180,7 @@ function waitForServer(child) {
   try {
     const startupOutput = await waitForServer(child);
     assert(startupOutput.includes('B1_SCHEDULER_ACTIVE'), 'startup logs active B1 scheduler');
+    assert(startupOutput.includes('SALARY_SCHEDULER_ACTIVE'), 'startup logs active salary scheduler');
     const route = await request(childPort, '/admin');
     assert.strictEqual(route.status, 200, 'child /admin route works');
     const adminLogin = await request(childPort, '/api/auth/login', { method: 'POST', body: { email: 'admin-scheduler@hb9.local', password: 'Admin@123456' } });
