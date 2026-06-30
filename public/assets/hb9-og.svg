@@ -1,0 +1,14 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#050607"/>
+  <rect x="42" y="42" width="1116" height="546" rx="36" fill="#090B0D" stroke="#00E5C3" stroke-width="3"/>
+  <circle cx="942" cy="118" r="210" fill="#00E5C3" fill-opacity=".08"/>
+  <circle cx="190" cy="500" r="240" fill="#8B5CF6" fill-opacity=".12"/>
+  <path d="M238 158 376 238v159l-138 80-138-80V238l138-80Z" fill="#050607" stroke="#00E5C3" stroke-width="10"/>
+  <path d="M238 205 335 261v112l-97 56-97-56V261l97-56Z" fill="#090B0D" stroke="#8B5CF6" stroke-width="5"/>
+  <text x="238" y="337" text-anchor="middle" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="88" font-weight="900">HB9</text>
+  <text x="452" y="274" fill="#FFFFFF" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="900">HB9 Coin Ecosystem</text>
+  <text x="456" y="344" fill="#9BA8C6" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="600">Join HB9 Exchange, staking, rewards,</text>
+  <text x="456" y="392" fill="#9BA8C6" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="600">and income opportunities.</text>
+  <rect x="456" y="438" width="310" height="62" rx="31" fill="#00E5C3"/>
+  <text x="611" y="480" text-anchor="middle" fill="#03100E" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="900">coin.hb9.live</text>
+</svg>
