@@ -1,7 +1,14 @@
-try { require('dotenv').config(); } catch (_) { /* .env is optional in the dependency-free demo */ }
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env'), quiet: true });
+console.log({
+  cwd: process.cwd(),
+  dirname: __dirname,
+  envPath: path.join(__dirname, '.env'),
+  apiLoaded: !!process.env.NOWPAYMENTS_API_KEY,
+  ipnLoaded: !!process.env.NOWPAYMENTS_IPN_SECRET
+});
 const crypto = require('crypto');
 const { HDNodeWallet, Interface, JsonRpcProvider, Wallet, Contract, getAddress, isAddress, formatUnits, parseUnits, parseEther } = require('ethers');
 
@@ -95,6 +102,12 @@ function ensureBootstrapAdmin(db){
 function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const repaired=repairBep20RawUnitAmounts(db).corrected, bnbRepaired=repairBnbConversionPrecision(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(repaired||bnbRepaired||bootstrapped)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
 function normalizeRuntimeAddress(address){try{const value=String(address||'').trim();return isAddress(value)?getAddress(value).toLowerCase():null;}catch(_){return null;}}
+function normalizeUsdtBep20WalletAddress(address){
+  const value=String(address||'').trim();
+  if(!value)return null;
+  if(!value.startsWith('0x'))return null;
+  try{return isAddress(value)?getAddress(value):null;}catch(_){return null;}
+}
 function runtimeStorageDiagnostics(db=readDB()){
   const target='0xE0C9e2843f53b79A7C0632116f805a26061DADaA';
   const normalizedTarget=normalizeRuntimeAddress(target);
@@ -1575,6 +1588,17 @@ function send(res,status,payload) { res.writeHead(status, {'Content-Type':'appli
 function body(req) { return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('end',()=>{try{resolve(b?JSON.parse(b):{})}catch(e){reject(e)}})}); }
 function rawBody(req) { return new Promise((resolve,reject)=>{let b='';req.on('data',x=>b+=x);req.on('error',reject);req.on('end',()=>resolve(b));}); }
 function safeUser(u){ const {passwordHash,salt,...safe}=u; return safe; }
+function bindUsdtBep20Wallet(db,u,walletAddress){
+  const normalized=normalizeUsdtBep20WalletAddress(walletAddress);
+  if(!normalized)throw Error('Valid USDT BEP20 wallet address is required');
+  const now=new Date().toISOString(), wasBound=Boolean(u.usdtBep20WalletAddress);
+  u.usdtBep20WalletAddress=normalized;
+  u.walletAddress=normalized;
+  if(!u.walletBoundAt)u.walletBoundAt=now;
+  u.walletUpdatedAt=now;
+  audit(db,wasBound?'USER_USDT_BEP20_WALLET_UPDATED':'USER_USDT_BEP20_WALLET_BOUND',{userId:u.id,walletAddress:normalized});
+  return safeUser(u);
+}
 function directReferralInvestmentSummary(db,member){
   const investment=stakeInvestmentSummary(db,member.id);
   const income=userIncomeSummary(db,member.id);
@@ -1615,6 +1639,7 @@ const server=http.createServer(async(req,res)=>{
       if (p==='/api/auth/logout'&&method==='POST') { const bearer=(req.headers.authorization||'').replace('Bearer ',''); if(bearer)sessions.delete(bearer); return send(res,200,{message:'Logged out'}); }
       if (p==='/api/auth/register'&&method==='POST') { const {name,email,password,sponsorEmail}=await body(req); if(!name||!email||!password||password.length<8)return send(res,400,{error:'Name, email and 8+ character password are required'}); if(db.users.some(x=>x.email.toLowerCase()===email.toLowerCase()))return send(res,409,{error:'Email already registered'}); const h=hash(password), sponsorCode=String(sponsorEmail||'').trim().toLowerCase(), sponsor=db.users.find(x=>String(x.email||'').toLowerCase()===sponsorCode); const u={id:id('usr'),name,email:email.toLowerCase(),role:'user',status:'active',passwordHash:h.hash,salt:h.salt,walletAddress:null,sponsorId:sponsor?.id||null,createdAt:new Date().toISOString()}; db.users.push(u);writeDB(db);const token=crypto.randomBytes(32).toString('hex');sessions.set(token,{userId:u.id});return send(res,201,{message:'Registration complete.',token,user:safeUser(u)}); }
       const u=auth(req,db); if(!u)return send(res,401,{error:'Authentication required'});
+      if(p==='/api/profile/usdt-bep20-wallet'&&method==='POST'){try{const input=await body(req),user=bindUsdtBep20Wallet(db,u,input.walletAddress);writeDB(db);return send(res,200,{message:u.walletBoundAt===u.walletUpdatedAt?'Wallet bound':'Wallet updated',user});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/team/levels'&&method==='GET'){const requestedUserId=url.searchParams.get('userId')||u.id;if(requestedUserId!==u.id&&u.role!=='admin')return send(res,403,{error:'Admin only action'});const target=userById(db,requestedUserId);if(!target||target.role!=='user')return send(res,404,{error:'User not found'});return send(res,200,teamLevelsReport(db,target.id,20));}
       if(p==='/api/market/hb9-ticker'&&method==='GET'){try{const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1}),market=priceInfo.market;return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,price:priceInfo.price,icpPrice:market.icpPrice,hb9BasePrice:priceInfo.price,priceOffset:market.priceOffset,hb9BuyPrice:priceInfo.buyPrice,hb9SellPrice:priceInfo.sellPrice,buyPrice:priceInfo.buyPrice,sellPrice:priceInfo.sellPrice,spreadPercent:market.spreadPercent,manualOverrideEnabled:market.manualOverrideEnabled,high24h:market.high24h,low24h:market.low24h,volume24h:market.baseVolume,quoteVolume24h:market.quoteVolume,changePercent:market.changePercent,fallbackUsed:priceInfo.fallbackUsed});}catch(error){return send(res,503,{error:error.message});}}
       if(p==='/api/market/hb9-klines'&&method==='GET'){const interval={"15m":"15m","1h":"1h","4h":"4h","1d":"1d"}[url.searchParams.get('interval')]||'1d';try{const market=await exchangeMarket(db,interval,120);return send(res,200,{symbol:'HB9/USDT',pair:'HB9/USDT',source:market.source,candles:market.candles});}catch(error){return send(res,503,{error:error.message});}}
