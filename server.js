@@ -1,13 +1,17 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
-console.log({
+const ENV_PATH = path.join(__dirname, '.env');
+require('dotenv').config({ path: ENV_PATH, override: true, quiet: true });
+const presentEnv = key => String(process.env[key] || '').trim().length > 0;
+console.log('NOWPAYMENTS_CONFIG_BOOT', {
   cwd: process.cwd(),
   dirname: __dirname,
-  envPath: path.join(__dirname, '.env'),
-  apiLoaded: !!process.env.NOWPAYMENTS_API_KEY,
-  ipnLoaded: !!process.env.NOWPAYMENTS_IPN_SECRET
+  envPath: ENV_PATH,
+  envFileExists: fs.existsSync(ENV_PATH),
+  apiKeyPresent: presentEnv('NOWPAYMENTS_API_KEY'),
+  ipnSecretPresent: presentEnv('NOWPAYMENTS_IPN_SECRET'),
+  baseUrlPresent: presentEnv('NOWPAYMENTS_BASE_URL')
 });
 const crypto = require('crypto');
 const { HDNodeWallet, Interface, JsonRpcProvider, Wallet, Contract, getAddress, isAddress, formatUnits, parseUnits, parseEther } = require('ethers');
@@ -710,10 +714,13 @@ function hdWalletConsistencyStatus(){
   }catch(error){return {configured:false,error:`HD wallet configuration is invalid: ${error.message}`,hdFingerprint:hdFingerprint(),derivationPath:hdBaseDerivationPath(),signerSource:'HD_WALLET_MNEMONIC+HD_WALLET_XPRV'};}
 }
 function depositServiceStatus(){
+  const apiKeyPresent=presentEnv('NOWPAYMENTS_API_KEY'), ipnSecretPresent=presentEnv('NOWPAYMENTS_IPN_SECRET');
   const missing=[];
-  if(!process.env.NOWPAYMENTS_API_KEY)missing.push('NOWPAYMENTS_API_KEY');
-  if(!process.env.NOWPAYMENTS_IPN_SECRET)missing.push('NOWPAYMENTS_IPN_SECRET');
-  return {configured:missing.length===0,provider:'NOWPayments',missing,message:missing.length?'NOWPayments deposit gateway is not configured yet.':'NOWPayments deposit gateway is active.'};
+  if(!apiKeyPresent)missing.push('NOWPAYMENTS_API_KEY');
+  if(!ipnSecretPresent)missing.push('NOWPAYMENTS_IPN_SECRET');
+  const configured=apiKeyPresent&&ipnSecretPresent;
+  console.log('NOWPAYMENTS_CONFIG_CHECK',{apiKeyPresent,ipnSecretPresent,configured});
+  return {configured,provider:'NOWPayments',missing,message:configured?'NOWPayments deposit gateway is active.':'NOWPayments deposit gateway is not configured yet.'};
 }
 function depositAddressServiceStatus(){
   const status=hdWalletConsistencyStatus();
