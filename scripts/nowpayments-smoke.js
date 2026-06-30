@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const {
   createNowPaymentsDeposit,
   creditNowPaymentsDeposit,
+  markExpiredNowPaymentsDeposits,
   verifyNowPaymentsSignature,
   sortedJson
 } = require('../server');
@@ -47,6 +48,8 @@ function sign(payload) {
   assert(created.deposit.payAddress, 'Payment response must expose an on-site pay address');
   assert.strictEqual(created.deposit.payAmount, 25, 'Payment response must expose the pay amount');
   assert(created.deposit.paymentUrl, 'Payment page URL may exist only as fallback');
+  assert(created.deposit.expiresAt, 'Payment response must expose a deposit expiry');
+  assert(Math.abs((Date.parse(created.deposit.expiresAt) - Date.parse(created.deposit.createdAt)) - 20 * 60 * 1000) < 2000, 'Deposit expiry must be 20 minutes after creation');
 
   const ipn = {
     payment_id: created.deposit.paymentId,
@@ -68,11 +71,28 @@ function sign(payload) {
   assert.strictEqual(duplicate.duplicate, true, 'Duplicate IPN must be detected');
   assert.strictEqual(store.wallet_ledger.filter(x => x.reason === 'NOWPayments deposit credited').length, 1, 'Duplicate IPN must not double credit');
 
+  const expiringStore = db();
+  const expiringCreated = await createNowPaymentsDeposit(expiringStore, 'usr_1', 15);
+  expiringCreated.deposit.expiresAt = new Date(Date.now() - 1000).toISOString();
+  assert.strictEqual(markExpiredNowPaymentsDeposits(expiringStore), true, 'Pending deposit must expire after 20 minutes');
+  assert.strictEqual(expiringStore.deposits[0].status, 'expired', 'Expired deposit must be marked expired');
+  const late = creditNowPaymentsDeposit(expiringStore, { payment_id: expiringCreated.deposit.paymentId, order_id: expiringCreated.deposit.orderId, payment_status: 'finished', price_amount: 15, updated_at: new Date().toISOString() });
+  assert.strictEqual(late.credited, false, 'Late finished IPN after expiry must not credit');
+  assert.strictEqual(late.reason, 'late_after_expiry', 'Late finished IPN must be recorded as late after expiry');
+  assert.strictEqual(expiringStore.wallet_ledger.length, 0, 'Expired deposit cannot be reused for wallet credit');
+
+  const paidBeforeExpiryStore = db();
+  const paidBeforeExpiryCreated = await createNowPaymentsDeposit(paidBeforeExpiryStore, 'usr_1', 18);
+  paidBeforeExpiryCreated.deposit.expiresAt = new Date(Date.now() - 1000).toISOString();
+  const paidBeforeExpiry = creditNowPaymentsDeposit(paidBeforeExpiryStore, { payment_id: paidBeforeExpiryCreated.deposit.paymentId, order_id: paidBeforeExpiryCreated.deposit.orderId, payment_status: 'finished', price_amount: 18, updated_at: new Date(Date.now() - 60 * 1000).toISOString() });
+  assert.strictEqual(paidBeforeExpiry.credited, true, 'IPN finalized before expiresAt must credit even if received later');
+  assert.strictEqual(paidBeforeExpiryStore.wallet_ledger.filter(x => x.reason === 'NOWPayments deposit credited').length, 1, 'Before-expiry IPN must write one wallet credit');
+
   const failedStore = db();
   const failedCreated = await createNowPaymentsDeposit(failedStore, 'usr_1', 10);
   const failed = creditNowPaymentsDeposit(failedStore, { payment_id: failedCreated.deposit.paymentId, order_id: failedCreated.deposit.orderId, payment_status: 'expired', price_amount: 10 });
   assert.strictEqual(failed.credited, false, 'Expired payment must not credit');
-  assert.strictEqual(failedStore.deposits[0].status, 'failed', 'Expired payment must mark deposit failed');
+  assert.strictEqual(failedStore.deposits[0].status, 'expired', 'Expired payment must mark deposit expired');
   assert.strictEqual(failedStore.wallet_ledger.length, 0, 'Expired payment must not write wallet ledger credit');
 
   console.log('NOWPAYMENTS SMOKE PASS: on-site payment address mock, valid IPN credit, duplicate idempotency, invalid signature rejection, and expired payment handling verified.');

@@ -10,6 +10,9 @@
 .deposit-payment-details .field input{overflow:hidden;text-overflow:ellipsis}
 .deposit-payment-details .referral-actions{flex-wrap:wrap}
 .deposit-payment-details .referral-actions .ghost{text-align:center;text-decoration:none}
+.deposit-countdown{display:inline-flex;margin:0 0 12px;padding:7px 10px;border-radius:999px;color:#ffda81;background:rgba(255,205,99,.12);font-size:12px;font-weight:800}
+.deposit-expired{display:grid;gap:6px;width:100%;padding:4px 0;color:#ffda81}
+.deposit-expired small{color:var(--muted)}
 .referral-share-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .referral-share-head h2{margin:6px 0 0}
 .referral-share-close{width:38px;height:38px;padding:0;font-size:20px;line-height:1}

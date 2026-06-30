@@ -52,7 +52,8 @@ async function renderDepositWithFreshService(freshDashboard) {
     paymentStatus: 'waiting',
     paymentUrl: 'https://nowpayments.io/payment/?pid=mock_pay_abcdef123456',
     status: 'pending',
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 20 * 60 * 1000).toISOString()
   };
   const creditedDeposit = {
     ...deposit,
@@ -77,8 +78,12 @@ async function renderDepositWithFreshService(freshDashboard) {
     }
   };
   const logs = [];
-  let intervalCallback;
+  let pollingCallback;
+  let countdownCallback;
+  let popupTimeout;
   let bodyHtml = '';
+  let backdropRemoved = false;
+  const localStore = {};
   const dashboardAfterCredit = {
     ...freshDashboard,
     user: { ...(freshDashboard.user || {}), wallet: { USDT: 25 } },
@@ -87,12 +92,15 @@ async function renderDepositWithFreshService(freshDashboard) {
   const context = {
     data: { deposits: [], depositService: { configured: false, message: 'NOWPayments deposit gateway is not configured yet.' } },
     me: null,
-    localStorage: {},
+    localStorage: {
+      getItem: key => localStore[key] || null,
+      setItem: (key, value) => { localStore[key] = String(value); }
+    },
     page,
     console: { log: (name, payload) => logs.push({ name, payload }) },
     api: async (url, options = {}) => {
       if (url === '/api/dashboard') {
-        return intervalCallback ? dashboardAfterCredit : freshDashboard;
+        return pollingCallback ? dashboardAfterCredit : freshDashboard;
       }
       if (url === '/api/deposits') {
         assert.strictEqual(options.method, 'POST', 'Deposit form should create a deposit with POST /api/deposits');
@@ -107,10 +115,20 @@ async function renderDepositWithFreshService(freshDashboard) {
     loading: () => () => {},
     navigator: { clipboard: { writeText: async () => {} } },
     window: {},
-    setInterval: callback => { intervalCallback = callback; return 7; },
+    setInterval: (callback, ms) => {
+      if (ms === 1000) countdownCallback = callback;
+      if (ms === 5000) pollingCallback = callback;
+      return ms;
+    },
     clearInterval: () => {},
+    setTimeout: (callback, ms) => { popupTimeout = { callback, ms }; return 10; },
+    Date,
     document: {
-      querySelector: selector => (selector === '[data-close-deposit-success]' ? { addEventListener: () => {} } : null),
+      querySelector: selector => {
+        if (selector === '[data-close-deposit-success]') return { addEventListener: () => {} };
+        if (selector === '.deposit-success-backdrop') return { remove: () => { backdropRemoved = true; bodyHtml = ''; } };
+        return null;
+      },
       body: { insertAdjacentHTML: (_position, html) => { bodyHtml += html; } },
       createElement: () => ({ value: '', select: () => {}, remove: () => {} }),
       execCommand: () => true
@@ -120,10 +138,12 @@ async function renderDepositWithFreshService(freshDashboard) {
   assert.strictEqual(context.data.depositService.configured, true, 'Deposit renderer should use fresh configured dashboard service');
   assert(!page.innerHTML.includes('NOWPayments deposit gateway is not configured yet.'), 'Deposit page must not show not-configured message when backend is configured');
   assert(logs.some(item => item.name === 'DEPOSIT_FRONTEND_STATUS' && item.payload.configured === true), 'Deposit page should log configured frontend status');
+  assert(!bodyHtml.includes('Congratulations!'), 'Deposit page refresh should not show success popup before a new credited polling transition');
   assert.strictEqual(typeof form.onsubmit, 'function', 'Deposit form submit handler should be attached');
 
   await form.onsubmit({ preventDefault: () => {}, submitter: { disabled: false, textContent: 'Create deposit' } });
   assert(panel.innerHTML.includes('Send USDT BEP20'), 'Created deposit should render on-site BEP20 payment details');
+  assert(panel.innerHTML.includes('Payment expires in'), 'Created deposit should render countdown timer');
   assert(panel.innerHTML.includes('api.qrserver.com/v1/create-qr-code'), 'Created deposit should render a QR code');
   assert(panel.innerHTML.includes('0x1111111111111111111111111111111111111111'), 'Created deposit should render pay_address');
   assert(panel.innerHTML.includes('Copy address'), 'Created deposit should render copy address button');
@@ -131,12 +151,29 @@ async function renderDepositWithFreshService(freshDashboard) {
   assert(panel.innerHTML.includes('Open payment page'), 'Fallback NOWPayments page link may be rendered');
   assert(!/<a[^>]*>\s*Pay\s*<\/a>/.test(panel.innerHTML), 'Created deposit must not render a primary Pay redirect');
   assert(tbody.inserted.includes('mock_pay'), 'Deposit history should show short payment id');
+  assert.strictEqual(typeof countdownCallback, 'function', 'Deposit page should start a countdown timer');
 
-  assert.strictEqual(typeof intervalCallback, 'function', 'Deposit page should poll dashboard status after create');
-  await intervalCallback();
+  assert.strictEqual(typeof pollingCallback, 'function', 'Deposit page should poll dashboard status after create');
+  await pollingCallback();
   assert(panel.innerHTML.includes('Credited'), 'Polling should update the on-site payment status to credited');
   assert(bodyHtml.includes('Congratulations!'), 'Credited polling response should show success popup');
   assert(bodyHtml.includes('Your deposit amount $25.00 has been credited successfully.'), 'Success popup should include credited amount');
+  assert.strictEqual(popupTimeout.ms, 10000, 'Success popup should auto close after 10 seconds');
+  popupTimeout.callback();
+  assert.strictEqual(backdropRemoved, true, 'Success popup auto-close should remove the popup');
+
+  const popupCountAfterFirstCredit = Object.keys(localStore).filter(key => key.startsWith('hb9.deposit.success.')).length;
+  await pollingCallback();
+  assert.strictEqual(Object.keys(localStore).filter(key => key.startsWith('hb9.deposit.success.')).length, popupCountAfterFirstCredit, 'Credited deposit popup should only be marked shown once');
+
+  deposit.status = 'pending';
+  deposit.paymentStatus = 'waiting';
+  deposit.expiresAt = new Date(Date.now() - 1000).toISOString();
+  panel.innerHTML = '';
+  await form.onsubmit({ preventDefault: () => {}, submitter: { disabled: false, textContent: 'Create deposit' } });
+  countdownCallback();
+  assert(panel.innerHTML.includes('This deposit request has expired. Please create a new deposit.'), 'Expired deposit should replace address panel with expiry message');
+  assert(!panel.innerHTML.includes('0x1111111111111111111111111111111111111111'), 'Expired deposit should hide/cancel the payment address panel');
 }
 
 async function main() {
@@ -156,6 +193,8 @@ async function main() {
   assert(created.deposit.payAddress, 'POST /api/deposits should return pay_address on the deposit');
   assert.strictEqual(created.deposit.payAmount, 12.5, 'POST /api/deposits should return pay_amount on the deposit');
   assert.strictEqual(created.deposit.payCurrency, 'usdtbsc', 'POST /api/deposits should return BEP20 USDT pay_currency');
+  assert(created.deposit.expiresAt, 'POST /api/deposits should return expiresAt');
+  assert(Math.abs((Date.parse(created.deposit.expiresAt) - Date.parse(created.deposit.createdAt)) - 20 * 60 * 1000) < 2000, 'POST /api/deposits should expire in 20 minutes');
   await renderDepositWithFreshService(dashboard);
   await new Promise(resolve => server.close(resolve));
   console.log('deposit-page-config-smoke ok');
