@@ -25,7 +25,8 @@ assert(appSource.includes('WhatsApp') && appSource.includes('Telegram'), 'share 
 assert(appSource.includes('const sponsorEmail=currentReferralCode();'), 'registration should prefill sponsor from stored/current referral code');
 assert(appSource.includes('sponsorInput=document.querySelector'), 'registration should distinguish visible sponsor field from hidden/internal sponsor');
 assert(appSource.includes('sponsorEmail=storeReferralCode(sponsorInput?sponsorInput.value.trim():currentReferralCode())'), 'registration should submit sponsor internally and allow user removal');
-assert(appSource.includes('clearReferralCode();renderRegistrationSuccess()'), 'successful registration should clear stored referral and show success screen');
+assert(appSource.includes('clearReferralCode();if(!x.token||!x.user)'), 'successful account creation should clear stored referral before auto-login handling');
+assert(appSource.includes('storeAuthSession(x);renderRegistrationSuccess()'), 'successful referral registration should store token and show success screen');
 
 const referralLinkSource = appSource.match(/function referralLink[^\n]+/)?.[0];
 const referralParamSource = appSource.match(/function referralParam[^\n]+/)?.[0];
@@ -99,5 +100,8 @@ assert(fs.existsSync(path.join(__dirname, '..', 'public', 'assets', 'hb9-og.svg'
 assert(cssSource.includes('.referral-share-modal') && cssSource.includes('@media(max-width:600px)'), 'share modal should include mobile bottom-sheet styling');
 assert(serverSource.includes("String(sponsorEmail||'').trim().toLowerCase()"), 'backend should normalize submitted sponsor code');
 assert(serverSource.includes("String(x.email||'').toLowerCase()===sponsorCode"), 'backend should attach sponsor case-insensitively');
+assert(!serverSource.includes('const {name,email,password,sponsorEmail,walletAddress}=await body(req)'), 'backend registration should not accept walletAddress from request body');
+assert(!serverSource.includes("walletAddress&&typeof walletAddress==='string'"), 'backend registration should not validate walletAddress');
+assert(serverSource.includes('walletAddress:null,sponsorId:sponsor?.id||null'), 'backend should create new users without a registration wallet address');
 
 console.log('referral-link-smoke ok');
