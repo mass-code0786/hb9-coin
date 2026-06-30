@@ -2,6 +2,14 @@
 .referral-card .referral-link{display:block;margin:4px 0 10px;overflow-wrap:anywhere}
 .referral-actions{display:flex;gap:10px;margin-top:12px}
 .referral-actions button{min-width:104px}
+.deposit-payment-card{display:grid;grid-template-columns:190px minmax(0,1fr);gap:18px;width:100%;align-items:start}
+.deposit-payment-qr{display:grid;place-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:rgba(255,255,255,.92)}
+.deposit-payment-qr img{display:block;width:100%;max-width:190px;height:auto;border-radius:8px}
+.deposit-payment-details{min-width:0}
+.deposit-payment-details .lock-card{grid-template-columns:repeat(4,minmax(0,1fr))}
+.deposit-payment-details .field input{overflow:hidden;text-overflow:ellipsis}
+.deposit-payment-details .referral-actions{flex-wrap:wrap}
+.deposit-payment-details .referral-actions .ghost{text-align:center;text-decoration:none}
 .referral-share-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
 .referral-share-head h2{margin:6px 0 0}
 .referral-share-close{width:38px;height:38px;padding:0;font-size:20px;line-height:1}
@@ -12,4 +20,5 @@
 .referral-share-option svg{width:30px;height:30px;flex:0 0 30px}
 .referral-share-option.whatsapp{border-color:rgba(37,211,102,.36)}
 .referral-share-option.telegram{border-color:rgba(34,158,217,.4)}
-@media(max-width:600px){.referral-actions{display:grid;grid-template-columns:1fr 1fr}.referral-actions button{width:100%;min-height:44px}.referral-share-backdrop{align-items:end;place-items:end center;padding:0}.referral-share-modal{width:100%;border-radius:22px 22px 0 0;padding:20px 16px 24px}.referral-share-option{min-height:64px;font-size:16px}}
+@media(max-width:700px){.deposit-payment-card{grid-template-columns:1fr}.deposit-payment-qr{width:min(220px,100%);margin:auto}.deposit-payment-details .lock-card{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.referral-actions{display:grid;grid-template-columns:1fr 1fr}.referral-actions button{width:100%;min-height:44px}.deposit-payment-details .referral-actions{grid-template-columns:1fr}.deposit-payment-details .lock-card{grid-template-columns:1fr}.referral-share-backdrop{align-items:end;place-items:end center;padding:0}.referral-share-modal{width:100%;border-radius:22px 22px 0 0;padding:20px 16px 24px}.referral-share-option{min-height:64px;font-size:16px}}

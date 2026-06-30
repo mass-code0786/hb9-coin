@@ -38,14 +38,20 @@ function sign(payload) {
 (async () => {
   const store = db();
   const created = await createNowPaymentsDeposit(store, 'usr_1', 25);
-  assert.strictEqual(store.deposits.length, 1, 'Create deposit invoice mock must save one deposit');
+  assert.strictEqual(store.deposits.length, 1, 'Create deposit payment mock must save one deposit');
   assert.strictEqual(created.deposit.provider, 'NOWPayments', 'Deposit provider must be NOWPayments');
   assert.strictEqual(created.deposit.status, 'pending', 'New NOWPayments deposit must be pending');
-  assert(created.deposit.invoiceUrl, 'Mock invoice should expose a payment page link');
+  assert.strictEqual(created.deposit.network, 'USDT BEP20', 'NOWPayments deposit must be BEP20 only');
+  assert.strictEqual(created.deposit.payCurrency, 'usdtbsc', 'NOWPayments pay_currency must be USDT on BSC/BEP20');
+  assert.strictEqual(created.payment.pay_currency, 'usdtbsc', 'Payment response must expose BEP20 USDT currency');
+  assert(created.deposit.payAddress, 'Payment response must expose an on-site pay address');
+  assert.strictEqual(created.deposit.payAmount, 25, 'Payment response must expose the pay amount');
+  assert(created.deposit.paymentUrl, 'Payment page URL may exist only as fallback');
 
   const ipn = {
     payment_id: created.deposit.paymentId,
     invoice_id: created.deposit.invoiceId,
+    order_id: created.deposit.orderId,
     payment_status: 'finished',
     price_amount: 25,
     price_currency: 'usd'
@@ -64,12 +70,12 @@ function sign(payload) {
 
   const failedStore = db();
   const failedCreated = await createNowPaymentsDeposit(failedStore, 'usr_1', 10);
-  const failed = creditNowPaymentsDeposit(failedStore, { payment_id: failedCreated.deposit.paymentId, invoice_id: failedCreated.deposit.invoiceId, payment_status: 'expired', price_amount: 10 });
+  const failed = creditNowPaymentsDeposit(failedStore, { payment_id: failedCreated.deposit.paymentId, order_id: failedCreated.deposit.orderId, payment_status: 'expired', price_amount: 10 });
   assert.strictEqual(failed.credited, false, 'Expired payment must not credit');
   assert.strictEqual(failedStore.deposits[0].status, 'failed', 'Expired payment must mark deposit failed');
   assert.strictEqual(failedStore.wallet_ledger.length, 0, 'Expired payment must not write wallet ledger credit');
 
-  console.log('NOWPAYMENTS SMOKE PASS: invoice mock, valid IPN credit, duplicate idempotency, invalid signature rejection, and expired payment handling verified.');
+  console.log('NOWPAYMENTS SMOKE PASS: on-site payment address mock, valid IPN credit, duplicate idempotency, invalid signature rejection, and expired payment handling verified.');
 })().catch(error => {
   console.error(error);
   process.exit(1);

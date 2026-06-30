@@ -35,6 +35,7 @@ const BSC_CHAIN = 'BSC';
 const DEFAULT_HD_DERIVATION_PATH = "m/44'/60'/0'/0";
 const BLOCKED_UNSAFE_DEPOSIT_ADDRESSES = new Set(['0xeb513f05b51fbe4c4acedef60ae9ef1ee8f694c7a']);
 const USDT_BEP20_DECIMALS = 18;
+const NOWPAYMENTS_USDT_BEP20_CURRENCY = 'usdtbsc';
 const RAW_USDT_MIGRATION_THRESHOLD = 1000000000;
 const USDT_BEP20_ABI = ['event Transfer(address indexed from, address indexed to, uint256 value)'];
 const usdtInterface = new Interface(USDT_BEP20_ABI);
@@ -971,8 +972,8 @@ function verifyNowPaymentsSignature(rawBody,payload,signature,secret=process.env
 function nowPaymentsIpnUrl(){return `${APP_URL.replace(/\/+$/,'')}/api/nowpayments/ipn`;}
 async function nowPaymentsRequest(endpoint,payload){
   if(process.env.NOWPAYMENTS_MOCK==='true'){
-    const invoiceId=`mock_inv_${crypto.randomUUID()}`,paymentId=`mock_pay_${crypto.randomUUID()}`;
-    return {id:invoiceId,invoice_id:invoiceId,payment_id:paymentId,invoice_url:`https://nowpayments.io/payment/?iid=${invoiceId}`,pay_currency:'usdtbsc',pay_address:'TMockNowPaymentsAddress',price_amount:payload.price_amount,price_currency:payload.price_currency};
+    const paymentId=`mock_pay_${crypto.randomUUID()}`;
+    return {id:paymentId,payment_id:paymentId,order_id:payload.order_id,payment_status:'waiting',payment_url:`https://nowpayments.io/payment/?pid=${paymentId}`,pay_currency:payload.pay_currency||NOWPAYMENTS_USDT_BEP20_CURRENCY,pay_address:'0x1111111111111111111111111111111111111111',pay_amount:payload.price_amount,price_amount:payload.price_amount,price_currency:payload.price_currency};
   }
   const response=await fetch(`${NOWPAYMENTS_BASE_URL}${endpoint}`,{method:'POST',headers:{'Content-Type':'application/json','x-api-key':process.env.NOWPAYMENTS_API_KEY},body:JSON.stringify(payload)});
   const text=await response.text();
@@ -986,23 +987,25 @@ async function createNowPaymentsDeposit(db,userId,amount){
   const value=roundCurrency(Number(amount));
   if(!Number.isFinite(value)||value<=0)throw Error('Deposit amount must be greater than zero');
   const depositId=id('dep'),now=new Date().toISOString();
-  const invoice=await nowPaymentsRequest('/invoice',{price_amount:value,price_currency:'usd',order_id:depositId,order_description:`HB9 USDT wallet deposit ${depositId}`,ipn_callback_url:nowPaymentsIpnUrl(),success_url:NOWPAYMENTS_SUCCESS_URL,cancel_url:NOWPAYMENTS_CANCEL_URL});
-  const paymentId=String(invoice.payment_id||invoice.id||invoice.invoice_id||'');
-  const invoiceId=String(invoice.invoice_id||invoice.id||'');
-  const deposit={id:depositId,userId,amount:value,asset:'USDT',provider:'NOWPayments',network:'NOWPayments',status:'pending',paymentStatus:'pending',paymentId,payment_id:paymentId,invoiceId,invoice_id:invoiceId,invoiceUrl:invoice.invoice_url||invoice.payment_url||invoice.url||null,payAddress:invoice.pay_address||null,payCurrency:invoice.pay_currency||null,createdAt:now,credited:false,creditedAt:null};
+  const payment=await nowPaymentsRequest('/payment',{price_amount:value,price_currency:'usd',pay_currency:NOWPAYMENTS_USDT_BEP20_CURRENCY,order_id:depositId,order_description:`HB9 USDT BEP20 wallet deposit ${depositId}`,ipn_callback_url:nowPaymentsIpnUrl()});
+  const paymentId=String(payment.payment_id||payment.id||''), invoiceId=String(payment.invoice_id||'');
+  const payCurrency=String(payment.pay_currency||NOWPAYMENTS_USDT_BEP20_CURRENCY).toLowerCase(), payAddress=payment.pay_address||null, payAmount=Number(payment.pay_amount??value);
+  if(payCurrency!==NOWPAYMENTS_USDT_BEP20_CURRENCY)throw Error('NOWPayments did not return a USDT BEP20 payment currency');
+  if(!payAddress)throw Error('NOWPayments did not return a deposit address');
+  const deposit={id:depositId,orderId:depositId,order_id:depositId,userId,amount:value,asset:'USDT',provider:'NOWPayments',network:'USDT BEP20',status:'pending',paymentStatus:normalizeNowPaymentStatus(payment.payment_status)||'waiting',paymentId,payment_id:paymentId,invoiceId,invoice_id:invoiceId,invoiceUrl:payment.payment_url||payment.invoice_url||payment.url||null,paymentUrl:payment.payment_url||payment.invoice_url||payment.url||null,payAddress,payAmount:Number.isFinite(payAmount)&&payAmount>0?payAmount:value,payCurrency,createdAt:now,credited:false,creditedAt:null};
   db.deposits=db.deposits||[];db.deposits.push(deposit);
   audit(db,'NOWPAYMENTS_DEPOSIT_CREATED',{depositId,userId,amount:value,paymentId,invoiceId,payCurrency:deposit.payCurrency});
-  return {deposit,payment:invoice,service:status};
+  return {deposit,payment,service:status};
 }
-function nowPaymentMatches(deposit,payloadPaymentId,payloadInvoiceId){
-  const paymentId=String(payloadPaymentId||''),invoiceId=String(payloadInvoiceId||'');
-  return Boolean((paymentId&&[deposit.paymentId,deposit.payment_id].map(String).includes(paymentId))||(invoiceId&&[deposit.invoiceId,deposit.invoice_id].map(String).includes(invoiceId)));
+function nowPaymentMatches(deposit,payloadPaymentId,payloadInvoiceId,payloadOrderId){
+  const paymentId=String(payloadPaymentId||''),invoiceId=String(payloadInvoiceId||''),orderId=String(payloadOrderId||'');
+  return Boolean((paymentId&&[deposit.paymentId,deposit.payment_id].map(String).includes(paymentId))||(invoiceId&&[deposit.invoiceId,deposit.invoice_id].map(String).includes(invoiceId))||(orderId&&[deposit.orderId,deposit.order_id,deposit.id].map(String).includes(orderId)));
 }
 function normalizeNowPaymentStatus(status){return String(status||'').trim().toLowerCase();}
 function creditNowPaymentsDeposit(db,payload){
   db.deposits=db.deposits||[];db.nowpayments_ipn_events=db.nowpayments_ipn_events||[];
-  const paymentId=String(payload.payment_id||payload.id||''),invoiceId=String(payload.invoice_id||payload.invoiceId||''),status=normalizeNowPaymentStatus(payload.payment_status),now=new Date().toISOString();
-  const deposit=db.deposits.find(item=>item.provider==='NOWPayments'&&nowPaymentMatches(item,paymentId,invoiceId));
+  const paymentId=String(payload.payment_id||payload.id||''),invoiceId=String(payload.invoice_id||payload.invoiceId||''),orderId=String(payload.order_id||payload.orderId||''),status=normalizeNowPaymentStatus(payload.payment_status),now=new Date().toISOString();
+  const deposit=db.deposits.find(item=>item.provider==='NOWPayments'&&nowPaymentMatches(item,paymentId,invoiceId,orderId));
   if(!deposit)throw Error('Matching NOWPayments deposit was not found');
   deposit.paymentStatus=status||deposit.paymentStatus;
   deposit.lastIpnAt=now;
@@ -1011,15 +1014,15 @@ function creditNowPaymentsDeposit(db,payload){
     Object.assign(deposit,{status:'failed',failedAt:deposit.failedAt||now});
     return {deposit,credited:false,reason:'terminal_failed_status'};
   }
-  if(status==='confirming'||status==='confirmed')deposit.status='confirming';
+  if(['confirming','confirmed','sending'].includes(status))deposit.status='confirming';
   if(!['confirmed','finished'].includes(status))return {deposit,credited:false,reason:'not_final'};
   const incomingAmount=Number(payload.price_amount??payload.actually_paid??payload.pay_amount);
   if(Number.isFinite(incomingAmount)&&incomingAmount>0&&!amountsMatch(incomingAmount,deposit.amount))throw Error('NOWPayments amount does not match deposit invoice');
   const refId=paymentId||invoiceId||deposit.id;
   const alreadyCredited=deposit.credited||(db.wallet_ledger||[]).some(x=>x.userId===deposit.userId&&x.asset==='USDT'&&x.direction==='credit'&&x.reason==='NOWPayments deposit credited'&&x.refId===refId);
   if(!alreadyCredited)walletEntry(db,{userId:deposit.userId,asset:'USDT',direction:'credit',amount:deposit.amount,reason:'NOWPayments deposit credited',refId});
-  Object.assign(deposit,{status:'credited',paymentStatus:status,credited:true,creditedAt:deposit.creditedAt||now,creditedAmount:deposit.amount,paymentId:deposit.paymentId||paymentId,invoiceId:deposit.invoiceId||invoiceId});
-  audit(db,'NOWPAYMENTS_DEPOSIT_CREDITED',{depositId:deposit.id,userId:deposit.userId,amount:deposit.amount,paymentId,invoiceId,duplicate:alreadyCredited});
+  Object.assign(deposit,{status:'credited',paymentStatus:status,credited:true,creditedAt:deposit.creditedAt||now,creditedAmount:deposit.amount,paymentId:deposit.paymentId||paymentId,invoiceId:deposit.invoiceId||invoiceId,orderId:deposit.orderId||orderId});
+  audit(db,'NOWPAYMENTS_DEPOSIT_CREDITED',{depositId:deposit.id,userId:deposit.userId,amount:deposit.amount,paymentId,invoiceId,orderId,duplicate:alreadyCredited});
   return {deposit,credited:!alreadyCredited,duplicate:alreadyCredited};
 }
 function adminFundTransfer(db,admin,{userId,asset,action,amount,reason}){
