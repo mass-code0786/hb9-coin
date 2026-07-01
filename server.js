@@ -624,6 +624,96 @@ function salaryReport(db,userId,{asOf=null}={}){
 function salaryPeriodDate(date=today()){return String(date||today()).slice(0,10);}
 function salaryDuplicateKey(userId,date){return `${userId}:${salaryPeriodDate(date)}:SALARY`;}
 function isSalaryRunDate(date){return SALARY_SCHEDULER_DATES.includes(Number(String(date).slice(8,10)));}
+const SALARY_ATOMIC_COLLECTIONS=['salary_payouts','reserve_wallets','reserve_ledger','wallet_ledger','incomeLedger','income_emissions'];
+function salarySnapshot(db){return Object.fromEntries(SALARY_ATOMIC_COLLECTIONS.map(name=>[name,JSON.parse(JSON.stringify(db[name]||[]))]));}
+function salaryRestore(db,snapshot){Object.entries(snapshot).forEach(([name,value])=>{db[name]=value;});}
+function salaryExistingPayout(db,userId,periodDate,duplicateKey){
+  ensureSalaryTables(db);
+  return db.salary_payouts.find(x=>salaryPayoutKey(x)===duplicateKey||(salaryPayoutUserId(x)===userId&&salaryPayoutDate(x)===periodDate&&salaryPayoutStatus(x)!=='superseded'));
+}
+function salaryWalletCreditExists(db,userId,duplicateKey){
+  return (db.wallet_ledger||[]).some(x=>x.userId===userId&&String(x.asset||'').toUpperCase()==='HB9'&&x.direction==='credit'&&x.refId===duplicateKey);
+}
+function saveSalaryPayout(db,existingSalary,record,createdAt){
+  ensureSalaryTables(db);
+  if(existingSalary)Object.assign(existingSalary,record,{updatedAt:createdAt});
+  else db.salary_payouts.push(record);
+  return existingSalary||record;
+}
+function upsertSalaryIncomeLedger(db,record,createdAt){
+  db.incomeLedger=db.incomeLedger||[];
+  const duplicateKey=salaryPayoutKey(record);
+  let row=db.incomeLedger.find(x=>isSalaryIncomeRecord(x)&&salaryPayoutKey(x)===duplicateKey);
+  const payload={id:row?.id||id('inc'),userId:salaryPayoutUserId(record),type:'SALARY_INCOME',asset:'HB9',rank:record.rank,rankName:record.rankName,incomeDate:salaryPayoutDate(record),date:salaryPayoutDate(record),duplicateKey,incomeKey:duplicateKey,usdAmount:roundCurrency(Number(record.usdAmount)||Number(record.valueUsd)||0),valueUsd:roundCurrency(Number(record.usdAmount)||Number(record.valueUsd)||0),amount:salaryPayoutAmount(record),hb9Amount:salaryPayoutAmount(record),status:'credited',reason:record.reason||'Salary income credited',createdAt:row?.createdAt||record.createdAt||createdAt,immutable:true};
+  if(row)Object.assign(row,payload,{updatedAt:createdAt});else db.incomeLedger.push(payload);
+  return row||payload;
+}
+function upsertSalaryEmission(db,record,createdAt){
+  db.income_emissions=db.income_emissions||[];
+  const duplicateKey=salaryPayoutKey(record);
+  let row=db.income_emissions.find(x=>x.refId===duplicateKey||x.incomeKey===duplicateKey||x.duplicateKey===duplicateKey);
+  const payload={id:row?.id||id('iem'),userId:salaryPayoutUserId(record),type:'SALARY_INCOME',asset:'HB9',amount:salaryPayoutAmount(record),valueUsd:roundCurrency(Number(record.usdAmount)||Number(record.valueUsd)||0),status:'credited',reason:record.reason||'Salary income credited',refId:duplicateKey,duplicateKey,incomeKey:duplicateKey,createdAt:row?.createdAt||record.createdAt||createdAt,immutable:true};
+  if(row)Object.assign(row,payload,{updatedAt:createdAt});else db.income_emissions.push(payload);
+  return row||payload;
+}
+function salaryPayoutRecord({user,rank,report,periodDate,duplicateKey,payoutId,price,payableUsd,hb9Amount,status,reason,createdAt,existingSalary}){
+  return {id:payoutId,userId:user.id,type:'SALARY_INCOME',asset:'HB9',rank:rank?.rank,rankName:rank?.rankName||rank?.name,salaryPeriodDate:periodDate,cycleStart:periodDate,cycleEnd:periodDate,duplicateKey,incomeKey:duplicateKey,usdAmount:payableUsd,hb9Amount,status,reason,hb9PriceAtPayout:price,personalInvestmentUsd:report?.salaryCap?.personalInvestmentUsd,maxSalaryCapUsd:report?.salaryCap?.maxSalaryCapUsd,totalSalaryPaidUsd:report?.salaryCap?.totalSalaryPaidUsd,createdAt:existingSalary?.createdAt||createdAt,immutable:true};
+}
+function creditSalaryPayoutAtomic(db,context){
+  const snapshot=salarySnapshot(db);
+  try{
+    const {user,periodDate,duplicateKey,payableUsd,hb9Amount,createdAt}=context;
+    audit(db,'SALARY_START',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:Boolean(context.repair)});
+    reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:hb9Amount,reason:'Salary income emission',userId:user.id,refId:duplicateKey});
+    walletEntry(db,{userId:user.id,asset:'HB9',direction:'credit',amount:hb9Amount,reason:'Salary income credited',refId:duplicateKey,type:'SALARY_INCOME'});
+    audit(db,'SALARY_WALLET_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:Boolean(context.repair)});
+    const record=salaryPayoutRecord({...context,status:'credited',reason:'Salary income credited'});
+    const payout=saveSalaryPayout(db,context.existingSalary,record,createdAt);
+    upsertSalaryIncomeLedger(db,payout,createdAt);
+    upsertSalaryEmission(db,payout,createdAt);
+    audit(db,'SALARY_LEDGER_UPDATED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:Boolean(context.repair)});
+    audit(db,'SALARY_COMPLETED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:Boolean(context.repair)});
+    audit(db,'SALARY_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,rank:context.rank?.rank,rankName:context.rank?.rankName||context.rank?.name,usdAmount:payableUsd,hb9Amount});
+    return payout;
+  }catch(error){
+    salaryRestore(db,snapshot);
+    throw error;
+  }
+}
+function queueFailedSalaryPayout(db,context,error){
+  const createdAt=context.createdAt||new Date().toISOString();
+  const existingSalary=salaryExistingPayout(db,context.user.id,context.periodDate,context.duplicateKey);
+  const reason=error?.message||'Salary payout failed';
+  const record=salaryPayoutRecord({...context,existingSalary,status:'queued',reason});
+  saveSalaryPayout(db,existingSalary,record,createdAt);
+  audit(db,'SALARY_FAILED',{userId:context.user.id,salaryPeriodDate:context.periodDate,duplicateKey:context.duplicateKey,error:reason});
+}
+function repairQueuedSalaryPayouts(db,{startup=false}={}){
+  ensureSalaryTables(db);ensureSupply(db);
+  const createdAt=new Date().toISOString(), summary={startup,checked:0,repaired:0,alreadyCredited:0,failed:0};
+  for(const row of [...db.salary_payouts]){
+    if(salaryPayoutStatus(row)!=='queued'||salaryPayoutAmount(row)<=0)continue;
+    summary.checked++;
+    const userId=salaryPayoutUserId(row), user=userById(db,userId)||{id:userId,role:'user'}, periodDate=salaryPayoutDate(row), duplicateKey=salaryPayoutKey(row), hb9Amount=salaryPayoutAmount(row), price=Number(row.hb9PriceAtPayout)||null, payableUsd=roundCurrency(Number(row.usdAmount)||Number(row.valueUsd)||0);
+    if(!userId||!periodDate||!duplicateKey){summary.failed++;audit(db,'SALARY_FAILED',{userId:userId||null,salaryPeriodDate:periodDate||null,duplicateKey:duplicateKey||null,error:'Queued salary row is missing user/date/key',repair:true,startup});continue;}
+    if(salaryWalletCreditExists(db,userId,duplicateKey)){
+      row.status='credited';row.reason=row.reason||'Salary income credited';row.updatedAt=createdAt;
+      upsertSalaryIncomeLedger(db,row,createdAt);upsertSalaryEmission(db,row,createdAt);
+      summary.alreadyCredited++;
+      audit(db,'SALARY_LEDGER_UPDATED',{userId,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:true,startup});
+      audit(db,'SALARY_COMPLETED',{userId,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:true,startup});
+      continue;
+    }
+    try{
+      creditSalaryPayoutAtomic(db,{user,rank:{rank:row.rank,rankName:row.rankName},report:{salaryCap:{personalInvestmentUsd:row.personalInvestmentUsd,maxSalaryCapUsd:row.maxSalaryCapUsd,totalSalaryPaidUsd:row.totalSalaryPaidUsd}},periodDate,duplicateKey,payoutId:row.id,price,payableUsd,hb9Amount,createdAt,existingSalary:row,repair:true});
+      summary.repaired++;
+    }catch(error){
+      summary.failed++;
+      audit(db,'SALARY_FAILED',{userId,salaryPeriodDate:periodDate,duplicateKey,error:error.message,repair:true,startup});
+    }
+  }
+  return summary;
+}
 async function processSalaryPayouts(db,date=today()){
   ensureSalaryTables(db);
   const periodDate=salaryPeriodDate(date), asOf=`${periodDate}T23:59:59.999Z`, createdAt=new Date().toISOString();
@@ -637,33 +727,27 @@ async function processSalaryPayouts(db,date=today()){
   for(const user of (db.users||[]).filter(x=>x.role==='user')){
     const duplicateKey=salaryDuplicateKey(user.id,periodDate), report=salaryReport(db,user.id,{asOf}), rank=report.currentRank;
     if(!rank){summary.skippedUsers++;summary.notEligibleUsers++;audit(db,'SALARY_SKIPPED_NOT_ELIGIBLE',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey});continue;}
-    const existingSalary=db.salary_payouts.find(x=>salaryPayoutKey(x)===duplicateKey||(salaryPayoutUserId(x)===user.id&&salaryPayoutDate(x)===periodDate&&salaryPayoutStatus(x)!=='superseded'));
-    const existingWalletCredit=(db.wallet_ledger||[]).some(x=>x.userId===user.id&&x.asset==='HB9'&&x.direction==='credit'&&x.refId===duplicateKey);
-    if(existingWalletCredit){
-      if(existingSalary)Object.assign(existingSalary,{status:'credited',reason:existingSalary.reason||'Salary income credited',updatedAt:createdAt});
+    const existingSalary=salaryExistingPayout(db,user.id,periodDate,duplicateKey);
+    if(salaryWalletCreditExists(db,user.id,duplicateKey)){
+      if(existingSalary){Object.assign(existingSalary,{status:'credited',reason:existingSalary.reason||'Salary income credited',updatedAt:createdAt});upsertSalaryIncomeLedger(db,existingSalary,createdAt);upsertSalaryEmission(db,existingSalary,createdAt);}
       summary.skippedUsers++;summary.duplicateUsers++;audit(db,'SALARY_SKIPPED_DUPLICATE',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey});continue;
     }
     if(existingSalary&&salaryPayoutStatus(existingSalary)!=='queued'){summary.skippedUsers++;summary.duplicateUsers++;audit(db,'SALARY_SKIPPED_DUPLICATE',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey});continue;}
     summary.processedUsers++;
     const remainingCap=report.salaryCap.remainingUsd, payableUsd=roundCurrency(Math.min(rank.salaryUsd,remainingCap)), payoutId=existingSalary?.id||id('salp');
-    const savePayout=record=>{if(existingSalary)Object.assign(existingSalary,record,{updatedAt:createdAt});else db.salary_payouts.push(record);};
     if(payableUsd<=0){
-      savePayout({id:payoutId,userId:user.id,type:'SALARY_INCOME',asset:'HB9',rank:rank.rank,rankName:rank.rankName,salaryPeriodDate:periodDate,cycleStart:periodDate,cycleEnd:periodDate,duplicateKey,incomeKey:duplicateKey,usdAmount:0,hb9Amount:0,hb9PriceAtPayout:price,status:'capped',reason:'Salary cap reached',personalInvestmentUsd:report.salaryCap.personalInvestmentUsd,maxSalaryCapUsd:report.salaryCap.maxSalaryCapUsd,totalSalaryPaidUsd:report.salaryCap.totalSalaryPaidUsd,createdAt:existingSalary?.createdAt||createdAt,immutable:true});
+      saveSalaryPayout(db,existingSalary,salaryPayoutRecord({user,rank,report,periodDate,duplicateKey,payoutId,price,payableUsd:0,hb9Amount:0,status:'capped',reason:'Salary cap reached',createdAt,existingSalary}),createdAt);
       summary.cappedUsers++;
       continue;
     }
     const hb9Amount=price>0?roundCurrency(payableUsd/price):0;
-    let status='credited', reason='Salary income credited';
     try{
-      reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:hb9Amount,reason:'Salary income emission',userId:user.id,refId:duplicateKey});
-      walletEntry(db,{userId:user.id,asset:'HB9',direction:'credit',amount:hb9Amount,reason:'Salary income credited',refId:duplicateKey});
+      creditSalaryPayoutAtomic(db,{user,rank,report,periodDate,duplicateKey,payoutId,price,payableUsd,hb9Amount,createdAt,existingSalary});
       summary.creditedUsers++;summary.totalSalaryUsd=roundCurrency(summary.totalSalaryUsd+payableUsd);summary.totalSalaryHb9=roundCurrency(summary.totalSalaryHb9+hb9Amount);
     }catch(error){
-      status='queued';reason='HB9 income reserve insufficient';summary.queuedUsers++;
+      queueFailedSalaryPayout(db,{user,rank,report,periodDate,duplicateKey,payoutId,price,payableUsd,hb9Amount,createdAt,existingSalary},error);
+      summary.queuedUsers++;
     }
-    savePayout({id:payoutId,userId:user.id,type:'SALARY_INCOME',asset:'HB9',rank:rank.rank,rankName:rank.rankName,salaryPeriodDate:periodDate,cycleStart:periodDate,cycleEnd:periodDate,duplicateKey,incomeKey:duplicateKey,usdAmount:payableUsd,hb9Amount,status,reason,hb9PriceAtPayout:price,personalInvestmentUsd:report.salaryCap.personalInvestmentUsd,maxSalaryCapUsd:report.salaryCap.maxSalaryCapUsd,totalSalaryPaidUsd:report.salaryCap.totalSalaryPaidUsd,createdAt:existingSalary?.createdAt||createdAt,immutable:true});
-    db.income_emissions.push({id:id('iem'),userId:user.id,type:'SALARY_INCOME',asset:'HB9',amount:hb9Amount,valueUsd:payableUsd,status,reason,createdAt,immutable:true});
-    if(status==='credited')audit(db,'SALARY_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,rank:rank.rank,rankName:rank.rankName,usdAmount:payableUsd,hb9Amount});
   }
   return summary;
 }
@@ -1812,5 +1896,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(routePath==='/'||routePath==='/exchange'||routePath==='/admin')?'/index.html':decodeURIComponent(routePath);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f),types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('DEPOSIT_RUNTIME_MODE',DEPOSIT_RUNTIME_MODE);console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());try{const db=readDB(), priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:GLOBAL_TEAM_SCHEDULER_UTC.label,b1:B1_SCHEDULER_UTC.label,roi:B1_SCHEDULER_UTC.label});console.log('B1_SCHEDULER_ACTIVE',{timeUtc:B1_SCHEDULER_UTC.label,enabled:true});console.log('SALARY_SCHEDULER_ACTIVE',{dates:SALARY_SCHEDULER_DATES,timeUtc:SALARY_SCHEDULER_UTC.label});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,markExpiredNowPaymentsDeposits,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,getUserDirectBusinessUsd,calculateB1IncomeForStake,incomeContext,b1StakeContexts,dailyB1Percent,b1IncomeKey,processSalaryPayouts,salaryDuplicateKey,isSalaryRunDate,nextSalaryDueTime,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,startDepositWatcher,startSweepWorker,pollDepositWatcher,pollSweepWorker,DEPOSIT_RUNTIME_MODE,server};
+if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('DEPOSIT_RUNTIME_MODE',DEPOSIT_RUNTIME_MODE);console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());try{const db=readDB(), repair=repairQueuedSalaryPayouts(db,{startup:true});if(repair.checked)writeDB(db);console.log('SALARY_REPAIR_STARTUP',repair);const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:GLOBAL_TEAM_SCHEDULER_UTC.label,b1:B1_SCHEDULER_UTC.label,roi:B1_SCHEDULER_UTC.label});console.log('B1_SCHEDULER_ACTIVE',{timeUtc:B1_SCHEDULER_UTC.label,enabled:true});console.log('SALARY_SCHEDULER_ACTIVE',{dates:SALARY_SCHEDULER_DATES,timeUtc:SALARY_SCHEDULER_UTC.label});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,markExpiredNowPaymentsDeposits,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,getUserDirectBusinessUsd,calculateB1IncomeForStake,incomeContext,b1StakeContexts,dailyB1Percent,b1IncomeKey,processSalaryPayouts,repairQueuedSalaryPayouts,salaryDuplicateKey,isSalaryRunDate,nextSalaryDueTime,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,startDepositWatcher,startSweepWorker,pollDepositWatcher,pollSweepWorker,DEPOSIT_RUNTIME_MODE,server};
