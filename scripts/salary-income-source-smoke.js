@@ -19,9 +19,8 @@ const db = {
   salary_ranks: [],
   salary_qualifications: [],
   salary_payouts: [
-    { id: 'sal_credited', userId: user.id, type: 'SALARY_INCOME', asset: 'HB9', rank: 1, rankName: 'Rank 1', salaryPeriodDate: '2026-07-01', cycleStart: '2026-07-01', duplicateKey: salaryKey, incomeKey: salaryKey, usdAmount: 20, hb9Amount: 9.52, status: 'CREDITED', reason: 'Salary income credited', createdAt: '2026-07-01T00:00:00.000Z' },
     { id: 'sal_duplicate', userId: user.id, type: 'SALARY_INCOME', asset: 'HB9', rank: 1, rankName: 'Rank 1', salaryPeriodDate: '2026-07-01', cycleStart: '2026-07-01', duplicateKey: salaryKey, incomeKey: salaryKey, usdAmount: 20, hb9Amount: 9.52, status: 'credited', reason: 'Duplicate fixture', createdAt: '2026-07-01T00:01:00.000Z' },
-    { id: 'sal_queued', userId: user.id, type: 'SALARY_INCOME', asset: 'HB9', rank: 1, rankName: 'Rank 1', salaryPeriodDate: '2026-07-16', cycleStart: '2026-07-16', duplicateKey: queuedKey, incomeKey: queuedKey, usdAmount: 20, hb9Amount: 7.25, status: 'QUEUED', reason: 'HB9 income reserve insufficient', createdAt: '2026-07-16T00:00:00.000Z' }
+    { id: 'sal_queued', userId: user.id, incomeType: 'SALARY_INCOME', asset: 'HB9', rank: 1, rankName: 'Rank 1', salaryDate: '2026-07-16', incomeKey: queuedKey, usdAmount: 20, salaryHb9Amount: 7.25, status: 'QUEUED', reason: 'HB9 income reserve insufficient', createdAt: '2026-07-16T00:00:00.000Z' }
   ],
   globalTeamRecords: [],
   flushRecords: [],
@@ -41,15 +40,16 @@ const db = {
   dailyRuns: [],
   schedulerRuns: {}
 };
+db.incomeLedger.push({ id: 'sal_credited', userId: user.id, type: 'SALARY_INCOME', asset: 'HB9', rank: 1, rankName: 'Rank 1', incomeDate: '2026-07-01', duplicateKey: salaryKey, incomeKey: salaryKey, usdAmount: 20, amount: 9.52, status: 'CREDITED', reason: 'Salary income credited', createdAt: '2026-07-01T00:00:00.000Z' });
 
 const summary = dashboard(db, user);
 const salaryHistory = summary.incomeHistory.filter(row => row.type === 'salary');
 
-assert.strictEqual(salaryHistory.length, 1, 'only credited salary row should appear in income history');
-assert.strictEqual(salaryHistory[0].amount, 9.52, 'salary history should use credited salary amount');
-assert.strictEqual(salaryHistory[0].status, 'Credited', 'credited salary status should display as Credited');
+assert.strictEqual(salaryHistory.length, 2, 'credited and queued salary rows should appear in income history');
+assert(salaryHistory.some(row => row.date === '2026-07-01' && row.amount === 9.52 && row.status === 'Credited'), 'credited salary history should normalize legacy/current duplicate shapes into one row');
+assert(salaryHistory.some(row => row.id === 'sal_queued' && row.date === '2026-07-16' && row.amount === 7.25 && row.status === 'Queued'), 'old queued salary row should stay visible in income history');
 assert.strictEqual(summary.income.totalSalary, 9.52, 'Salary Income card total should include credited salary once');
 assert.strictEqual(summary.wallets.hb9, 9.52, 'HB9 wallet should include credited salary once');
-assert(!salaryHistory.some(row => row.id === 'sal_queued'), 'queued salary should not appear as income history amount');
+assert.strictEqual(summary.income.totalSalary, summary.wallets.hb9, 'dashboard salary total and HB9 wallet should use same credited salary source');
 
 console.log('salary-income-source-smoke ok');
