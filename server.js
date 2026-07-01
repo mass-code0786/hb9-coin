@@ -54,6 +54,7 @@ const HB9_EXCHANGE_RESERVE_TOTAL = Math.max(0, Number(process.env.HB9_EXCHANGE_R
 const BNB_EXCHANGE_RESERVE_TOTAL = process.env.BNB_EXCHANGE_RESERVE_TOTAL === undefined ? null : Math.max(0, Number(process.env.BNB_EXCHANGE_RESERVE_TOTAL || 0));
 const DEFAULT_PRICE_OFFSET = 0.09;
 const TEST_HB9_PRICE = 2.25;
+const HB9_PRICE_FALLBACK_ENV = 'HB9_PRICE_FALLBACK';
 const LEVEL_INCOME_PERCENTS = [0.25,0.25,0.25,0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1,1,1,1,1,1,1];
 const LEVEL_DIRECT_MIN_STAKE_USD = 2;
 const SALARY_CYCLE_DAYS = 15;
@@ -134,10 +135,10 @@ function runtimeStorageDiagnostics(db=readDB()){
 }
 function initializeDB(){ DEV_ONLY_DEMO ? seedDevOnlyDemo() : seedProductionEmpty(); }
 function envHb9FallbackPrice(){
-  const raw=process.env.HB9_PRICE_FALLBACK ?? process.env.HB9_FALLBACK_PRICE ?? process.env.HB9_PRICE_USD_FALLBACK;
+  const raw=process.env[HB9_PRICE_FALLBACK_ENV] ?? process.env.HB9_FALLBACK_PRICE ?? process.env.HB9_PRICE_USD_FALLBACK;
   if(raw===undefined||raw===null||String(raw).trim()==='')return null;
   const value=Number(raw);
-  if(!Number.isFinite(value)||value<=0)throw Error('HB9 fallback price env must be greater than zero');
+  if(!Number.isFinite(value)||value<=0)throw Error(`${HB9_PRICE_FALLBACK_ENV} must be greater than zero`);
   return value;
 }
 function syncHb9FallbackPrice(db){
@@ -146,7 +147,7 @@ function syncHb9FallbackPrice(db){
   if(envFallback)return envFallback;
   const settings=marketSettings(db);
   if(settings.manualOverrideEnabled&&Number(settings.fallbackPrice)>0)return Number(settings.fallbackPrice);
-  throw Error('HB9 price source unavailable');
+  throw Error(`HB9 price source unavailable: missing env ${HB9_PRICE_FALLBACK_ENV}`);
 }
 function baseSettings(){
   const fallback=envHb9FallbackPrice();
@@ -362,6 +363,12 @@ function setMarketSettings(db,{fallbackPrice,buyPrice,priceOffset,spreadPercent,
   audit(db,'HB9_MARKET_PRICE_UPDATED',db.hb9_market_settings);
   return {settings:db.hb9_market_settings};
 }
+function hb9PriceSourceLog(info){
+  const numericPrice=info?.price===null||info?.price===undefined?null:Number(info.price);
+  const payload={source:info?.source||'unavailable',price:Number.isFinite(numericPrice)?numericPrice:null,fallbackUsed:Boolean(info?.fallbackUsed),error:info?.error||null};
+  console.log('HB9_PRICE_SOURCE',payload);
+  return payload;
+}
 function hb9MarketReport(db){
   const conversions=db.conversions||[];
   const buys=conversions.filter(x=>!x.direction||x.direction==='buy');
@@ -396,15 +403,22 @@ async function exchangeMarket(db,interval='1d',limit=120){
     return {source:'icp_proxy',price:prices.basePrice,icpPrice:prices.basePrice,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:false,high24h:Number(ticker.highPrice),low24h:Number(ticker.lowPrice),baseVolume:Number(ticker.volume),quoteVolume:Number(ticker.quoteVolume),changePercent:Number(ticker.priceChangePercent),candles:candles.map(x=>({time:x[0],open:Number(x[1]),high:Number(x[2]),low:Number(x[3]),close:Number(x[4]),volume:Number(x[5])}))};
   }catch(error){
     const fallback=envHb9FallbackPrice();
-    if(!fallback)throw Error(`HB9 price source unavailable: ${error.message}`);
-    audit(db,'HB9_PRICE_SOURCE_FALLBACK',{source:'env_fallback',price:fallback,reason:error.message});
+    if(!fallback)throw Error(`HB9 price source unavailable: live ICP/HB9 source failed (${error.message}); missing env ${HB9_PRICE_FALLBACK_ENV}`);
+    audit(db,'HB9_PRICE_SOURCE_FALLBACK',{source:'env_fallback',price:fallback,fallbackUsed:true,reason:error.message});
     const prices=offsetPrices(fallback,settings);
-    return {source:'fallback',price:prices.basePrice,icpPrice:prices.basePrice,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:false,high24h:prices.buyPrice,low24h:prices.sellPrice,baseVolume:0,quoteVolume:0,changePercent:0,candles:[]};
+    return {source:'env_fallback',price:prices.basePrice,icpPrice:null,hb9BasePrice:prices.basePrice,priceOffset:prices.priceOffset,hb9BuyPrice:prices.buyPrice,hb9SellPrice:prices.sellPrice,buyPrice:prices.buyPrice,sellPrice:prices.sellPrice,spreadPercent:settings.spreadPercent,manualOverrideEnabled:false,high24h:prices.buyPrice,low24h:prices.sellPrice,baseVolume:0,quoteVolume:0,changePercent:0,candles:[],fallbackError:error.message};
   }
 }
 async function hb9PriceSource(db,options={}){
-  const market=await exchangeMarket(db,options.interval||'1d',options.limit||1);
-  return {source:market.source,price:Number(market.hb9BasePrice??market.price),buyPrice:Number(market.hb9BuyPrice??market.buyPrice),sellPrice:Number(market.hb9SellPrice??market.sellPrice),fallbackUsed:market.source==='fallback',market};
+  try{
+    const market=await exchangeMarket(db,options.interval||'1d',options.limit||1);
+    const result={source:market.source,price:Number(market.hb9BasePrice??market.price),buyPrice:Number(market.hb9BuyPrice??market.buyPrice),sellPrice:Number(market.hb9SellPrice??market.sellPrice),fallbackUsed:market.source==='env_fallback'||market.source==='fallback',error:market.fallbackError||null,market};
+    hb9PriceSourceLog(result);
+    return result;
+  }catch(error){
+    hb9PriceSourceLog({source:'unavailable',price:null,fallbackUsed:false,error:error.message});
+    throw error;
+  }
 }
 async function bnbMarket(interval='1d',limit=120){
   const fallback=Number(process.env.BNB_USDT_FALLBACK_PRICE||process.env.BNB_PRICE_FALLBACK||600);
@@ -576,6 +590,8 @@ async function processSalaryPayouts(db,date=today()){
   if(!summary.runDateAllowed)return summary;
   const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1}), price=priceInfo.price;
   summary.hb9Price=price;
+  summary.hb9PriceSource={source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null};
+  audit(db,'SALARY_PRICE_SOURCE',summary.hb9PriceSource);
   for(const user of (db.users||[]).filter(x=>x.role==='user')){
     const duplicateKey=salaryDuplicateKey(user.id,periodDate), report=salaryReport(db,user.id,{asOf}), rank=report.currentRank;
     if(!rank){summary.skippedUsers++;summary.notEligibleUsers++;audit(db,'SALARY_SKIPPED_NOT_ELIGIBLE',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey});continue;}
@@ -1571,14 +1587,14 @@ async function runGlobalTeamDaily(db,{now=new Date(),fromDate=null,toDate=null,b
 async function runRoiDaily(db,{now=new Date(),fromDate=null,toDate=null,backfill=false,logStartComplete=true}={}){
   db.schedulerRuns=db.schedulerRuns||{};
   const end=String(toDate||lastDueDate(now,B1_SCHEDULER_UTC.hour,B1_SCHEDULER_UTC.minute)).slice(0,10),start=String(fromDate||schedulerRangeStart(db,'roi')).slice(0,10);
-  const hb9Price=await marketPayoutPrice(db);
-  if(logStartComplete){audit(db,'B1_DAILY_START',{fromDate:start,toDate:end,backfill,hb9Price,timeUtc:B1_SCHEDULER_UTC.label});audit(db,'ROI_DAILY_START',{fromDate:start,toDate:end,backfill,hb9Price});}
-  if(start>end){if(logStartComplete){audit(db,'B1_DAILY_COMPLETE',{fromDate:start,toDate:end,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0,timeUtc:B1_SCHEDULER_UTC.label});audit(db,'ROI_DAILY_COMPLETE',{fromDate:start,toDate:end,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0});}return {fromDate:start,toDate:end,hb9Price,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0};}
+  const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1}), hb9Price=priceInfo.price, priceSource={source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null};
+  if(logStartComplete){audit(db,'B1_DAILY_START',{fromDate:start,toDate:end,backfill,hb9Price,hb9PriceSource:priceSource,timeUtc:B1_SCHEDULER_UTC.label});audit(db,'ROI_DAILY_START',{fromDate:start,toDate:end,backfill,hb9Price,hb9PriceSource:priceSource});}
+  if(start>end){if(logStartComplete){audit(db,'B1_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0,timeUtc:B1_SCHEDULER_UTC.label});audit(db,'ROI_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0});}return {fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,processedUsers:0,createdDays:0,skippedDays:0,b1Credited:0};}
   if(backfill)audit(db,'ROI_BACKFILL',{fromDate:start,toDate:end});
   const summary=accrueGlobalPoints(db,{fromDate:start,toDate:end,hb9PriceOverride:hb9Price,roi:true,logDuplicates:true,now});
   db.schedulerRuns.roi={lastRunDate:end,lastRunAt:new Date().toISOString()};
-  if(logStartComplete){audit(db,'B1_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,timeUtc:B1_SCHEDULER_UTC.label,...summary});audit(db,'ROI_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,...summary});}
-  return {fromDate:start,toDate:end,hb9Price,...summary};
+  if(logStartComplete){audit(db,'B1_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,timeUtc:B1_SCHEDULER_UTC.label,...summary});audit(db,'ROI_DAILY_COMPLETE',{fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,...summary});}
+  return {fromDate:start,toDate:end,hb9Price,hb9PriceSource:priceSource,...summary};
 }
 async function executeScheduledRun(kind,options={}){
   const db=readDB(), summary=kind==='globalTeam'?await runGlobalTeamDaily(db,options):kind==='salary'?await processSalaryPayouts(db,utcDate(options.now||new Date())):await runRoiDaily(db,options);
@@ -1747,5 +1763,5 @@ const server=http.createServer(async(req,res)=>{
     let f=(routePath==='/'||routePath==='/exchange'||routePath==='/admin')?'/index.html':decodeURIComponent(routePath);f=path.join(PUBLIC,f);if(!f.startsWith(PUBLIC)||!fs.existsSync(f)) {res.writeHead(404);return res.end('Not found');} const ext=path.extname(f),types={'.html':'text/html','.css':'text/css','.js':'application/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp'};res.writeHead(200,{'Content-Type':types[ext]||'application/octet-stream'});fs.createReadStream(f).pipe(res);
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
-if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('DEPOSIT_RUNTIME_MODE',DEPOSIT_RUNTIME_MODE);console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());try{const db=readDB(), priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:GLOBAL_TEAM_SCHEDULER_UTC.label,b1:B1_SCHEDULER_UTC.label,roi:B1_SCHEDULER_UTC.label});console.log('B1_SCHEDULER_ACTIVE',{timeUtc:B1_SCHEDULER_UTC.label,enabled:true});console.log('SALARY_SCHEDULER_ACTIVE',{dates:SALARY_SCHEDULER_DATES,timeUtc:SALARY_SCHEDULER_UTC.label});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
+if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('DEPOSIT_RUNTIME_MODE',DEPOSIT_RUNTIME_MODE);console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());try{const db=readDB(), priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:GLOBAL_TEAM_SCHEDULER_UTC.label,b1:B1_SCHEDULER_UTC.label,roi:B1_SCHEDULER_UTC.label});console.log('B1_SCHEDULER_ACTIVE',{timeUtc:B1_SCHEDULER_UTC.label,enabled:true});console.log('SALARY_SCHEDULER_ACTIVE',{dates:SALARY_SCHEDULER_DATES,timeUtc:SALARY_SCHEDULER_UTC.label});startDailySchedulers();console.log(`HB9 Staking running at ${APP_URL}`);});
 module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,markExpiredNowPaymentsDeposits,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,getUserDirectBusinessUsd,calculateB1IncomeForStake,incomeContext,b1StakeContexts,dailyB1Percent,b1IncomeKey,processSalaryPayouts,salaryDuplicateKey,isSalaryRunDate,nextSalaryDueTime,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,startDepositWatcher,startSweepWorker,pollDepositWatcher,pollSweepWorker,DEPOSIT_RUNTIME_MODE,server};

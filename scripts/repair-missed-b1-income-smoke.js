@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { dailyB1Percent } = require('../server');
 
 const dataFile = path.join(os.tmpdir(), `hb9-b1-repair-${process.pid}.json`);
 const yesterday = (() => {
@@ -12,6 +13,7 @@ const yesterday = (() => {
 })();
 const wrongDate = '2026-01-01';
 const now = `${yesterday}T08:00:00.000Z`;
+const expectedB1Hb9 = Number(((225 * dailyB1Percent(yesterday) / 100) / 2.25).toFixed(2));
 
 function fixture() {
   return {
@@ -103,7 +105,7 @@ try {
   assert.strictEqual(repaired.length, 1, 'missing yesterday B1 is repaired once');
   assert.strictEqual(repaired[0].stakeId, 'stk_missing', 'repair row includes stake id');
   assert.strictEqual(repaired[0].incomeKey, `usr_missing:stk_missing:${yesterday}:B1`, 'repair row has duplicate-protection key');
-  assert.strictEqual(repaired[0].hb9Amount, 2, 'B1 amount follows current daily ROI and HB9 price');
+  assert.strictEqual(repaired[0].hb9Amount, expectedB1Hb9, 'B1 amount follows current daily B1 percent and HB9 price');
   assert.strictEqual(db.incomeLedger.filter(item => item.userId === 'usr_existing' && item.date === yesterday && item.type === 'B1_INCOME').length, 1, 'existing B1 is not duplicated');
   assert.strictEqual(db.incomeLedger.filter(item => item.userId === 'usr_inactive' && item.type === 'B1_INCOME').length, 0, 'inactive stake skipped');
   assert.strictEqual(db.incomeLedger.filter(item => item.userId === 'usr_wrong_date' && item.date === wrongDate && item.type === 'B1_INCOME').length, 1, 'wrong date existing row remains unchanged');
