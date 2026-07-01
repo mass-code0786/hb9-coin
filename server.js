@@ -664,8 +664,8 @@ function creditSalaryPayoutAtomic(db,context){
   try{
     const {user,periodDate,duplicateKey,payableUsd,hb9Amount,createdAt}=context;
     audit(db,'SALARY_START',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:Boolean(context.repair)});
-    reserveMove(db,{asset:'HB9',walletType:'income',direction:'debit',amount:hb9Amount,reason:'Salary income emission',userId:user.id,refId:duplicateKey});
     walletEntry(db,{userId:user.id,asset:'HB9',direction:'credit',amount:hb9Amount,reason:'Salary income credited',refId:duplicateKey,type:'SALARY_INCOME'});
+    audit(db,'SALARY_SYSTEM_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:Boolean(context.repair)});
     audit(db,'SALARY_WALLET_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:Boolean(context.repair)});
     const record=salaryPayoutRecord({...context,status:'credited',reason:'Salary income credited'});
     const payout=saveSalaryPayout(db,context.existingSalary,record,createdAt);
@@ -673,6 +673,7 @@ function creditSalaryPayoutAtomic(db,context){
     upsertSalaryEmission(db,payout,createdAt);
     audit(db,'SALARY_LEDGER_UPDATED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:Boolean(context.repair)});
     audit(db,'SALARY_COMPLETED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:Boolean(context.repair)});
+    if(context.repair)audit(db,'SALARY_REPAIRED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount});
     audit(db,'SALARY_CREDITED',{userId:user.id,salaryPeriodDate:periodDate,duplicateKey,rank:context.rank?.rank,rankName:context.rank?.rankName||context.rank?.name,usdAmount:payableUsd,hb9Amount});
     return payout;
   }catch(error){
@@ -702,6 +703,7 @@ function repairQueuedSalaryPayouts(db,{startup=false}={}){
       summary.alreadyCredited++;
       audit(db,'SALARY_LEDGER_UPDATED',{userId,salaryPeriodDate:periodDate,duplicateKey,hb9Amount,repair:true,startup});
       audit(db,'SALARY_COMPLETED',{userId,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,repair:true,startup});
+      audit(db,'SALARY_REPAIRED',{userId,salaryPeriodDate:periodDate,duplicateKey,usdAmount:payableUsd,hb9Amount,alreadyWalletCredited:true,startup});
       continue;
     }
     try{

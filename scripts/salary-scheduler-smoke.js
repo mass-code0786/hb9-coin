@@ -114,7 +114,7 @@ function addEligibleStructure(db) {
   assert(db.wallet_ledger.some(row => row.userId === 'usr_eligible' && row.reason === 'Salary income credited'), 'credited salary should write HB9 wallet credit');
 
   const logs = db.auditLogs.map(row => row.type);
-  for (const type of ['SALARY_DAILY_CHECK', 'SALARY_START', 'SALARY_WALLET_CREDITED', 'SALARY_LEDGER_UPDATED', 'SALARY_COMPLETED', 'SALARY_CREDITED', 'SALARY_SKIPPED_NOT_ELIGIBLE', 'SALARY_SKIPPED_DUPLICATE']) {
+  for (const type of ['SALARY_DAILY_CHECK', 'SALARY_START', 'SALARY_SYSTEM_CREDITED', 'SALARY_WALLET_CREDITED', 'SALARY_LEDGER_UPDATED', 'SALARY_COMPLETED', 'SALARY_CREDITED', 'SALARY_SKIPPED_NOT_ELIGIBLE', 'SALARY_SKIPPED_DUPLICATE']) {
     assert(logs.includes(type), `${type} log should exist`);
   }
 
@@ -122,14 +122,14 @@ function addEligibleStructure(db) {
   addEligibleStructure(retryDb);
   retryDb.reserve_wallets.find(row => row.asset === 'HB9' && row.walletType === 'income').balance = 0;
   const queued = await processSalaryPayouts(retryDb, '2026-07-01');
-  assert.strictEqual(queued.queuedUsers, 1, 'insufficient reserve should queue salary payout');
+  assert.strictEqual(queued.creditedUsers, 1, 'salary should credit even when HB9 income reserve is zero');
+  assert.strictEqual(queued.queuedUsers, 0, 'zero HB9 income reserve must not queue salary payout');
   const queuedPayout = retryDb.salary_payouts.find(row => row.userId === 'usr_eligible' && row.salaryPeriodDate === '2026-07-01');
-  assert(queuedPayout && queuedPayout.status === 'queued', 'queued salary row should be stored for retry');
-  assert.strictEqual(retryDb.wallet_ledger.filter(row => row.refId === queuedPayout.duplicateKey).length, 0, 'failed salary must not credit wallet');
-  assert(retryDb.auditLogs.some(row => row.type === 'SALARY_FAILED'), 'failed salary should log SALARY_FAILED');
-  retryDb.reserve_wallets.find(row => row.asset === 'HB9' && row.walletType === 'income').balance = 100000;
+  assert(queuedPayout && queuedPayout.status === 'credited', 'salary row should be credited without reserve debit');
+  assert.strictEqual(retryDb.reserve_ledger.filter(row => row.refId === queuedPayout.duplicateKey).length, 0, 'salary must not debit HB9 income reserve');
+  assert.strictEqual(retryDb.wallet_ledger.filter(row => row.refId === queuedPayout.duplicateKey).length, 1, 'salary should credit wallet once with zero reserve');
   const retried = await processSalaryPayouts(retryDb, '2026-07-01');
-  assert.strictEqual(retried.creditedUsers, 1, 'queued salary should be credited after reserve is funded');
+  assert.strictEqual(retried.creditedUsers, 0, 'rerun after zero-reserve credit must not credit again');
   assert.strictEqual(retryDb.salary_payouts.filter(row => row.userId === 'usr_eligible' && row.salaryPeriodDate === '2026-07-01').length, 1, 'queued retry should update existing salary row, not duplicate it');
   assert.strictEqual(queuedPayout.status, 'credited', 'queued salary row should become credited after retry');
   assert.strictEqual(retryDb.wallet_ledger.filter(row => row.refId === queuedPayout.duplicateKey).length, 1, 'queued retry should credit wallet once');
@@ -142,6 +142,7 @@ function addEligibleStructure(db) {
   assert.strictEqual(repaired.repaired, 1, 'startup repair should credit old queued salary rows');
   assert.strictEqual(repairDb.salary_payouts[0].status, 'credited', 'startup repair should mark queued salary credited');
   assert.strictEqual(repairDb.wallet_ledger.filter(row => row.refId === repairKey).length, 1, 'startup repair should credit wallet once');
+  assert(repairDb.auditLogs.some(row => row.type === 'SALARY_REPAIRED'), 'startup repair should log SALARY_REPAIRED');
   assert.strictEqual(repairQueuedSalaryPayouts(repairDb, { startup: true }).alreadyCredited, 0, 'credited salary should not be repaired again');
 
   console.log('salary-scheduler-smoke ok');
