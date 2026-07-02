@@ -379,7 +379,7 @@ body:before{
 
 .authbox,.card,.stat,.income,.incomeitem,.income-pair,.main-balance-card,
 .exchange-chart,.exchange-wallets,.exchange-market,.exchange-market>div,.exchange-convert,.withdraw-wallet,.withdraw-form,.withdraw-history,
-.team-summary,.b1-total-card,.transfer-balance,.tablewrap,.modal,.hero-panel,.landing-feature{
+.team-summary,.b1-total-card,.transfer-balance,.transfer-history-card,.tablewrap,.modal,.hero-panel,.landing-feature{
   color:var(--text-main)!important;
   background:linear-gradient(145deg,var(--bg-card),rgba(7,5,13,.9))!important;
   background-image:linear-gradient(145deg,var(--bg-card),rgba(7,5,13,.9))!important;
@@ -459,6 +459,16 @@ p,small,label,.muted,.sub,.stat .stat-label,.incomeitem label,.income-pair small
 .tablewrap,.global-team-tablewrap{
   border-color:var(--border)!important;
   background:rgba(9,5,16,.7)!important;
+}
+.transfer-history-card{
+  border-color:var(--border)!important;
+  background:linear-gradient(145deg,var(--bg-card),rgba(7,5,13,.9))!important;
+}
+.transfer-history-card span{
+  color:var(--text-muted)!important;
+}
+.transfer-history-card b{
+  color:var(--text-main)!important;
 }
 .table th,.global-team-table th{
   color:var(--text-muted)!important;
