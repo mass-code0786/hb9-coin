@@ -100,6 +100,17 @@ assert(!rendered.html.includes('<h2>$51.00</h2>'), 'Withdrawal page must not ren
 
 rendered = renderWithdraw({ usdt: 51, withdrawal: 0, deposits: [] });
 assert(rendered.html.includes('<h2>$51.00</h2>'), 'Wallet = $51 should render withdrawal wallet as $51');
+assert(rendered.html.includes('Withdrawal amount must be in multiples of $9.'), 'Withdrawal page should show the $9 multiple rule');
+rendered.buttons[0].onclick();
+assert.strictEqual(rendered.amount.value, '9.00', '25% quick amount should round down to nearest $9 multiple');
+rendered.buttons[1].onclick();
+assert.strictEqual(rendered.amount.value, '18.00', '50% quick amount should round down to nearest $9 multiple');
+rendered.buttons[2].onclick();
+assert.strictEqual(rendered.amount.value, '36.00', '75% quick amount should round down to nearest $9 multiple');
+rendered.buttons[3].onclick();
+assert.strictEqual(rendered.amount.value, '45.00', '100% quick amount should round down to nearest $9 multiple');
+rendered = renderWithdraw({ usdt: 8.99, withdrawal: 0, deposits: [] });
+assert(rendered.buttons.every(button => button.disabled === true), 'Quick amount buttons should be disabled when no $9 multiple is available');
 
 const longAddress = '0x2222222222222222222222222222222222222222';
 const txHash = `0x${'a'.repeat(64)}`;

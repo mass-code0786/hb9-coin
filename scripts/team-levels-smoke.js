@@ -67,6 +67,12 @@ for (const label of ['Status', 'Join Date', 'Stake Asset', 'Stake Amount', 'Inve
   assert(app.includes(label), `Team page renders ${label} label`);
 }
 assert(css.includes('.team-level-card') && css.includes('@media(max-width:800px)') && css.includes('overflow-wrap:anywhere'), 'mobile level team CSS exists without horizontal overflow');
+const teamPurpleTheme = css.slice(css.indexOf('/* HB9 team purple theme override */'));
+assert(teamPurpleTheme.includes('body.hb9-purple-theme .team-level-card'), 'HB9 theme override must style level cards');
+assert(teamPurpleTheme.includes('linear-gradient(145deg,rgba(18,12,32,.96),rgba(6,4,12,.94))'), 'Team cards must use the HB9 dark-purple gradient');
+assert(teamPurpleTheme.includes('rgba(168,85,247,.28)'), 'Team cards must use a purple border');
+assert(teamPurpleTheme.includes('rgba(139,92,246,.12)'), 'Team cards must use a purple glow');
+assert(!/0,229,195|#070b0c|#050909|#080e0e/.test(teamPurpleTheme), 'Final Team theme override must not use green or green-black card colors');
 
 function request(port, requestPath, { method = 'GET', token = null, body = null } = {}) {
   return new Promise((resolve, reject) => {

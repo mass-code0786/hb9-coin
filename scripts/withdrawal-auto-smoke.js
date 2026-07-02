@@ -76,9 +76,14 @@ function deps({ usdt = 100, bnb = '0.01', receipt = null, latest = 100, transfer
   const minDb = db();
   const minRequest = createWithdrawalRequest(minDb, minDb.users[0], { amount: 9, address: userAddress });
   assert.strictEqual(minRequest.withdrawal.amount, 9, '$9.00 withdrawal is accepted');
-  const tenDb = db();
-  const tenRequest = createWithdrawalRequest(tenDb, tenDb.users[0], { amount: 10, address: userAddress });
-  assert.strictEqual(tenRequest.withdrawal.amount, 10, '$10.00 withdrawal is accepted');
+  const eighteenDb = db();
+  const eighteenRequest = createWithdrawalRequest(eighteenDb, eighteenDb.users[0], { amount: 18, address: userAddress });
+  assert.strictEqual(eighteenRequest.withdrawal.amount, 18, '$18.00 withdrawal is accepted');
+  const twentySevenDb = db();
+  const twentySevenRequest = createWithdrawalRequest(twentySevenDb, twentySevenDb.users[0], { amount: 27, address: userAddress });
+  assert.strictEqual(twentySevenRequest.withdrawal.amount, 27, '$27.00 withdrawal is accepted');
+  assert.throws(() => createWithdrawalRequest(db(), db().users[0], { amount: 10, address: userAddress }), /Withdrawal amount must be in multiples of \$9\./, '$10 withdrawal is rejected');
+  assert.throws(() => createWithdrawalRequest(db(), db().users[0], { amount: 17, address: userAddress }), /Withdrawal amount must be in multiples of \$9\./, '$17 withdrawal is rejected');
 
   const successDb = db(), user = successDb.users[0];
   const originalEnv = {
@@ -94,23 +99,23 @@ function deps({ usdt = 100, bnb = '0.01', receipt = null, latest = 100, transfer
       else process.env[key] = value;
     }
   };
-  const missingConfigDb = db(), missingConfig = createWithdrawalRequest(missingConfigDb, missingConfigDb.users[0], { amount: 20, address: userAddress });
+  const missingConfigDb = db(), missingConfig = createWithdrawalRequest(missingConfigDb, missingConfigDb.users[0], { amount: 18, address: userAddress });
   delete process.env.WITHDRAWAL_PRIVATE_KEY;
   await processWithdrawalAutomation(missingConfigDb, missingConfig.withdrawal, deps());
   assert.strictEqual(missingConfig.withdrawal.status, 'pending', 'missing auto config leaves withdrawal pending');
   assert.strictEqual(missingConfig.withdrawal.failureReason, undefined, 'missing auto config must not store failureReason');
   restoreEnv();
 
-  const disabledDb = db(), disabled = createWithdrawalRequest(disabledDb, disabledDb.users[0], { amount: 20, address: userAddress });
+  const disabledDb = db(), disabled = createWithdrawalRequest(disabledDb, disabledDb.users[0], { amount: 18, address: userAddress });
   process.env.WITHDRAWAL_AUTO_ENABLED = 'false';
   await processWithdrawalAutomation(disabledDb, disabled.withdrawal, deps());
   assert.strictEqual(disabled.withdrawal.status, 'pending', 'disabled auto withdrawal leaves withdrawal pending');
   assert.strictEqual(disabled.withdrawal.failureReason, undefined, 'disabled auto withdrawal must not store failureReason');
   restoreEnv();
 
-  const first = createWithdrawalRequest(successDb, user, { amount: 20, address: userAddress, clientRequestId: 'wd-success' });
-  assert.strictEqual(walletBalances(successDb, user.id).withdrawableUsdt, 80, 'withdrawal amount is locked immediately');
-  const duplicate = createWithdrawalRequest(successDb, user, { amount: 20, address: userAddress, clientRequestId: 'wd-success' });
+  const first = createWithdrawalRequest(successDb, user, { amount: 18, address: userAddress, clientRequestId: 'wd-success' });
+  assert.strictEqual(walletBalances(successDb, user.id).withdrawableUsdt, 82, 'withdrawal amount is locked immediately');
+  const duplicate = createWithdrawalRequest(successDb, user, { amount: 18, address: userAddress, clientRequestId: 'wd-success' });
   assert.strictEqual(duplicate.duplicate, true, 'duplicate client request returns existing withdrawal');
   assert.strictEqual(successDb.withdrawals.length, 1, 'duplicate request must not create a second withdrawal');
 
@@ -120,7 +125,7 @@ function deps({ usdt = 100, bnb = '0.01', receipt = null, latest = 100, transfer
   assert.strictEqual(first.withdrawal.txHash, txHash, 'tx hash is stored');
   assert.strictEqual(first.withdrawal.fromAddress, hot, 'from address is stored');
   assert.strictEqual(first.withdrawal.toAddress, userAddress, 'to address is stored');
-  assert.strictEqual(first.withdrawal.netAmount, 19, 'net amount stores amount minus fee');
+  assert.strictEqual(first.withdrawal.netAmount, 17.1, 'net amount stores amount minus fee');
   await processWithdrawalBroadcast(successDb, first.withdrawal, okDeps);
   assert.strictEqual(okDeps.calls.transfers, 1, 'existing tx hash prevents duplicate broadcasts');
 
@@ -128,18 +133,18 @@ function deps({ usdt = 100, bnb = '0.01', receipt = null, latest = 100, transfer
   assert.strictEqual(first.withdrawal.status, 'confirmed', 'confirmed receipt updates withdrawal');
   assert(first.withdrawal.confirmedAt, 'confirmedAt is stored');
 
-  const lowUsdtDb = db(), lowUsdt = createWithdrawalRequest(lowUsdtDb, lowUsdtDb.users[0], { amount: 20, address: userAddress });
+  const lowUsdtDb = db(), lowUsdt = createWithdrawalRequest(lowUsdtDb, lowUsdtDb.users[0], { amount: 18, address: userAddress });
   await processWithdrawalBroadcast(lowUsdtDb, lowUsdt.withdrawal, deps({ usdt: 1 }));
   assert.strictEqual(lowUsdt.withdrawal.status, 'failed', 'insufficient hot USDT fails withdrawal');
   assert(lowUsdt.withdrawal.failureReason.includes('insufficient USDT'), 'insufficient hot USDT stores failureReason');
   assert.strictEqual(walletBalances(lowUsdtDb, 'usr_1').withdrawableUsdt, 100, 'failed hot USDT rollback releases lock');
 
-  const lowBnbDb = db(), lowBnb = createWithdrawalRequest(lowBnbDb, lowBnbDb.users[0], { amount: 20, address: userAddress });
+  const lowBnbDb = db(), lowBnb = createWithdrawalRequest(lowBnbDb, lowBnbDb.users[0], { amount: 18, address: userAddress });
   await processWithdrawalBroadcast(lowBnbDb, lowBnb.withdrawal, deps({ bnb: '0.0001' }));
   assert.strictEqual(lowBnb.withdrawal.status, 'failed', 'insufficient BNB gas fails withdrawal');
   assert(lowBnb.withdrawal.failureReason.includes('insufficient BNB'), 'insufficient BNB gas stores failureReason');
 
-  const failedTxDb = db(), failedTx = createWithdrawalRequest(failedTxDb, failedTxDb.users[0], { amount: 20, address: userAddress });
+  const failedTxDb = db(), failedTx = createWithdrawalRequest(failedTxDb, failedTxDb.users[0], { amount: 18, address: userAddress });
   await processWithdrawalBroadcast(failedTxDb, failedTx.withdrawal, deps({ transferFails: true }));
   assert.strictEqual(failedTx.withdrawal.status, 'failed', 'transfer exception marks failed');
   assert(failedTx.withdrawal.failureReason.includes('mock transfer failed'), 'failure reason is stored');

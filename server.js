@@ -58,6 +58,8 @@ const HB9_EXCHANGE_RESERVE_TOTAL = Math.max(0, Number(process.env.HB9_EXCHANGE_R
 const BNB_EXCHANGE_RESERVE_TOTAL = process.env.BNB_EXCHANGE_RESERVE_TOTAL === undefined ? null : Math.max(0, Number(process.env.BNB_EXCHANGE_RESERVE_TOTAL || 0));
 const DEFAULT_PRICE_OFFSET = 0.09;
 const DEFAULT_MIN_WITHDRAWAL = 9;
+const WITHDRAWAL_AMOUNT_MULTIPLE = 9;
+const WITHDRAWAL_MULTIPLE_MESSAGE = 'Withdrawal amount must be in multiples of $9.';
 const TEST_HB9_PRICE = 2.25;
 const HB9_PRICE_FALLBACK_ENV = 'HB9_PRICE_FALLBACK';
 const LEVEL_INCOME_PERCENTS = [0.25,0.25,0.25,0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1,1,1,1,1,1,1];
@@ -1589,12 +1591,22 @@ function withWithdrawalNonceLock(task){
 }
 function activeWithdrawalStatuses(){return ['pending','broadcasting','broadcasted'];}
 function completedWithdrawalStatuses(){return ['confirmed','approved'];}
+function normalizeWithdrawalAmount(amount){
+  const raw=Number(amount), cents=Math.round(raw*100);
+  if(!Number.isFinite(raw)||raw<=0||Math.abs(raw*100-cents)>1e-8)return null;
+  return cents/100;
+}
+function isWithdrawalAmountMultiple(value){
+  const cents=Math.round(Number(value)*100);
+  return Number.isFinite(Number(value))&&Math.abs(Number(value)*100-cents)<=1e-8&&cents%(WITHDRAWAL_AMOUNT_MULTIPLE*100)===0;
+}
 function createWithdrawalRequest(db,user,{amount,address,clientRequestId}={}){
-  const value=roundCurrency(Number(amount)),destination=normalizeUsdtBep20WalletAddress(address),max=Number(db.settings.maxWithdrawal||0),available=walletBalances(db,user.id).withdrawableUsdt;
+  const value=normalizeWithdrawalAmount(amount),destination=normalizeUsdtBep20WalletAddress(address),max=Number(db.settings.maxWithdrawal||0),available=walletBalances(db,user.id).withdrawableUsdt;
   if(clientRequestId){const existing=(db.withdrawals||[]).find(x=>x.userId===user.id&&x.clientRequestId===String(clientRequestId));if(existing)return {withdrawal:existing,duplicate:true};}
   if(!Number.isFinite(value)||value<=0)throw Error('Withdrawal amount is invalid');
   if(!destination)throw Error('Valid USDT BEP20 address is required');
   if(value<setting(db,'minWithdrawal'))throw Error(`Minimum withdrawal is ${setting(db,'minWithdrawal')} USDT`);
+  if(!isWithdrawalAmountMultiple(value))throw Error(WITHDRAWAL_MULTIPLE_MESSAGE);
   if(Number.isFinite(max)&&max>0&&value>max)throw Error(`Maximum withdrawal is ${max} USDT`);
   if(value>available)throw Error('Not enough USDT withdrawal balance. Convert HB9 to USDT before withdrawing.');
   const fee=roundCurrency(value*setting(db,'withdrawalFeePercent')/100),netAmount=roundCurrency(value-fee);

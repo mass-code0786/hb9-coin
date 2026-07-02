@@ -71,3 +71,83 @@
   margin:0!important;
   filter:none!important;
 }
+
+/* HB9 team purple theme override */
+body.hb9-purple-theme .team-clean-page,
+body.hb9-purple-theme .team-level-page{
+  width:100%;
+  max-width:1100px;
+  min-width:0;
+}
+body.hb9-purple-theme .team-summary,
+body.hb9-purple-theme .team-members,
+body.hb9-purple-theme .team-empty,
+body.hb9-purple-theme .team-level-card{
+  color:#f4f0ff!important;
+  background:linear-gradient(145deg,rgba(18,12,32,.96),rgba(6,4,12,.94))!important;
+  border:1px solid rgba(168,85,247,.28)!important;
+  border-radius:18px!important;
+  box-shadow:0 16px 38px rgba(0,0,0,.34),0 0 22px rgba(139,92,246,.12)!important;
+}
+body.hb9-purple-theme .team-level-card{
+  overflow:hidden;
+}
+body.hb9-purple-theme .team-level-card[open]{
+  border-color:rgba(168,85,247,.48)!important;
+  box-shadow:0 18px 42px rgba(0,0,0,.38),0 0 28px rgba(168,85,247,.18)!important;
+}
+body.hb9-purple-theme .team-summary div,
+body.hb9-purple-theme .team-member-list,
+body.hb9-purple-theme .level-team-member{
+  background:linear-gradient(145deg,rgba(22,15,39,.82),rgba(8,5,16,.9))!important;
+  border:1px solid rgba(168,85,247,.18)!important;
+  border-radius:12px!important;
+}
+body.hb9-purple-theme .team-member-head{
+  color:#c9b8f7!important;
+  background:linear-gradient(145deg,rgba(30,20,52,.92),rgba(13,8,24,.94))!important;
+}
+body.hb9-purple-theme .team-member-row{
+  border-top:1px solid rgba(168,85,247,.14)!important;
+}
+body.hb9-purple-theme .team-summary span,
+body.hb9-purple-theme .team-level-card summary span,
+body.hb9-purple-theme .member-main span,
+body.hb9-purple-theme .level-team-member small,
+body.hb9-purple-theme .team-member-row span:nth-child(n+2){
+  color:#bca8d8!important;
+}
+body.hb9-purple-theme .team-summary b,
+body.hb9-purple-theme .team-level-card summary strong,
+body.hb9-purple-theme .level-team-member b,
+body.hb9-purple-theme .level-team-member span{
+  color:#f4f0ff!important;
+}
+body.hb9-purple-theme .team-level-card summary{
+  background:linear-gradient(135deg,rgba(139,92,246,.14),rgba(15,10,28,.04))!important;
+}
+body.hb9-purple-theme .team-level-empty{
+  color:#bca8d8!important;
+  background:rgba(18,12,32,.58)!important;
+  border:1px dashed rgba(168,85,247,.24)!important;
+}
+
+@media(max-width:800px){
+  body.hb9-purple-theme .team-clean-page,
+  body.hb9-purple-theme .team-level-page{
+    width:100%;
+    max-width:100%;
+    padding-bottom:96px;
+  }
+  body.hb9-purple-theme .team-summary,
+  body.hb9-purple-theme .team-members,
+  body.hb9-purple-theme .team-empty,
+  body.hb9-purple-theme .team-level-card{
+    border-radius:14px!important;
+  }
+  body.hb9-purple-theme .team-level-card summary,
+  body.hb9-purple-theme .level-team-member{
+    width:100%;
+    max-width:100%;
+  }
+}
