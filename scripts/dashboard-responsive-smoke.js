@@ -5,6 +5,7 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
 const mobileCss = fs.readFileSync(path.join(root, 'public', 'mobile-defi-dashboard.css'), 'utf8');
+const themeCss = fs.readFileSync(path.join(root, 'public', 'hb9-purple-theme.css'), 'utf8');
 const incomeStackCss = fs.readFileSync(path.join(root, 'public', 'income-stack.css'), 'utf8');
 
 const expectedDashboardContent = [
@@ -96,5 +97,29 @@ assert(/\.defi-dashboard-active \.income-pair strong\s*\{[\s\S]*?font-size:\s*15
 assert(/@media\(max-width:390px\)[\s\S]*?\.defi-dashboard-active \.income-pair strong\{font-size:14px!important\}/.test(mobileCss), 'narrow mobile income values should shrink further');
 assert(mobileCss.includes('.defi-dashboard-active .hb9-coin-logo--income'), 'mobile income cards should size the HB9 icon');
 assert(incomeStackCss.includes('.hb9-income-amount'), 'desktop income cards should align HB9 number and icon cleanly');
+
+const bottomNavMobile = /@media\(max-width:800px\)[\s\S]*?body\.hb9-purple-theme \.defi-bottom-nav\s*\{([\s\S]*?)\n  \}/.exec(themeCss)?.[1] || '';
+assert(/display:\s*grid\s*!important/.test(bottomNavMobile), 'mobile bottom nav should use a constrained grid layout');
+assert(/grid-template-columns:\s*repeat\(5,minmax\(0,1fr\)\)\s*!important/.test(bottomNavMobile), 'mobile bottom nav should keep five equal item slots');
+
+assert(
+  /body\.hb9-purple-theme \.defi-bottom-nav button\s*\{[\s\S]*?max-width:\s*64px\s*!important[\s\S]*?border-radius:\s*22px\s*!important[\s\S]*?transition:\s*transform \.18s ease,box-shadow \.18s ease,background \.18s ease,color \.18s ease\s*!important/.test(themeCss),
+  'mobile bottom nav buttons should be compact rounded pills with smooth transitions'
+);
+
+assert(
+  /body\.hb9-purple-theme \.defi-bottom-nav button\.active\s*\{[\s\S]*?background:\s*linear-gradient\(135deg,#8b5cf6 0%,#a855f7 58%,#5b21b6 100%\)\s*!important[\s\S]*?box-shadow:[\s\S]*rgba\(168,85,247,\.34\)[\s\S]*?transform:\s*translateY\(-2px\) scale\(1\.02\)\s*!important/.test(themeCss),
+  'mobile bottom nav active item should use the purple gradient pill with glow'
+);
+
+assert(
+  /@media\(hover:hover\)[\s\S]*?body\.hb9-purple-theme \.defi-bottom-nav button:hover[\s\S]*?transform:\s*translateY\(-1px\) scale\(1\.01\)\s*!important/.test(themeCss),
+  'mobile bottom nav hover state should add a subtle lift'
+);
+
+assert(
+  /@media\(max-width:390px\)[\s\S]*?body\.hb9-purple-theme \.defi-bottom-nav button\s*\{[\s\S]*?max-width:\s*60px\s*!important[\s\S]*?border-radius:\s*20px\s*!important/.test(themeCss),
+  '390px mobile bottom nav should keep active pills compact without overflow'
+);
 
 console.log('dashboard-responsive-smoke ok');
