@@ -37,6 +37,8 @@ assert(css.includes('@media(max-width:800px)') && css.includes('.withdraw-histor
 assert(css.includes('.withdraw-history-cards{display:grid'), 'Mobile CSS should show withdrawal history cards');
 assert(css.includes('padding-bottom:88px'), 'Mobile withdrawal page should leave room above the bottom nav');
 assert(css.includes('.withdraw-submit{display:block;width:100%'), 'Withdrawal submit button should be full width');
+assert(css.includes('rgba(151,112,255,.26)') && css.includes('rgba(18,13,34,.96)'), 'Mobile withdrawal cards should keep the HB9 purple/dark theme');
+assert(!/withdraw-history-card\{[^}]*background:#050b0b/.test(css), 'Mobile withdrawal cards must not use the green/black card background');
 
 function renderWithdraw({ usdt, withdrawal = 51, deposits = [], withdrawals = [] }) {
   const page = {
@@ -110,7 +112,8 @@ rendered = renderWithdraw({
     netAmount: 19,
     toAddress: longAddress,
     status: 'broadcasted',
-    txHash
+    txHash,
+    failureReason: 'mock failure reason'
   }]
 });
 assert(rendered.html.includes('withdraw-history-cards'), 'Withdrawal page should render mobile history cards');
@@ -120,5 +123,6 @@ assert(rendered.html.includes('$20.00') && rendered.html.includes('$1.00') && re
 assert(rendered.html.includes('0x222222...222222'), 'Mobile card should show a shortened BEP20 address');
 assert(rendered.html.includes('Confirming'), 'Mobile card should show display status');
 assert(rendered.html.includes('https://bscscan.com/tx/'), 'Mobile card should include tx explorer link when available');
+assert(rendered.html.includes('mock failure reason'), 'Mobile card should show failureReason when available');
 
 console.log('withdrawal-balance-ui-smoke ok');

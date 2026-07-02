@@ -1568,9 +1568,13 @@ function retrySweep(db,sweep){if(!sweep||sweep.status!=='failed_retryable')throw
 function withdrawalConfirmationsRequired(){const value=Number(process.env.WITHDRAWAL_CONFIRMATIONS||12);return Number.isFinite(value)&&value>0?value:12;}
 function minWithdrawalGasBalance(){const value=Number(process.env.WITHDRAWAL_MIN_HOT_WALLET_BNB||0.002);return Number.isFinite(value)&&value>=0?value:0.002;}
 function withdrawalAutoEnabled(){return process.env.WITHDRAWAL_AUTO_ENABLED!=='false';}
+function withdrawalLog(event,payload={}){
+  try{console.log(event,{...payload,createdAt:new Date().toISOString()});}catch(_){console.log(event);}
+}
 function withdrawalHotWalletStatus(){
   const missing=[];
   if(!String(process.env.WITHDRAWAL_PRIVATE_KEY||'').trim())missing.push('WITHDRAWAL_PRIVATE_KEY');
+  if(!String(process.env.WITHDRAWAL_FROM_ADDRESS||'').trim())missing.push('WITHDRAWAL_FROM_ADDRESS');
   if(!String(process.env.BSC_RPC_URL||'').trim())missing.push('BSC_RPC_URL');
   if(!isAddress(process.env.USDT_BEP20_CONTRACT||''))missing.push('USDT_BEP20_CONTRACT');
   return {configured:missing.length===0,missing};
@@ -1596,33 +1600,42 @@ function createWithdrawalRequest(db,user,{amount,address,clientRequestId}={}){
   const fee=roundCurrency(value*setting(db,'withdrawalFeePercent')/100),netAmount=roundCurrency(value-fee);
   if(netAmount<=0)throw Error('Withdrawal amount after fee must be greater than zero');
   const now=new Date().toISOString(),withdrawal={id:id('wd'),userId:user.id,asset:'USDT',chain:BSC_CHAIN,amount:value,fee,netAmount,address:destination,toAddress:destination,status:'pending',clientRequestId:clientRequestId?String(clientRequestId):null,createdAt:now,updatedAt:now,confirmations:0,requiredConfirmations:withdrawalConfirmationsRequired(),immutable:true};
-  db.withdrawals.push(withdrawal);walletEntry(db,{userId:user.id,asset:'USDT',direction:'lock',amount:value,reason:'USDT withdrawal lock',refId:withdrawal.id,type:'WITHDRAWAL_LOCK'});audit(db,'WITHDRAWAL_REQUEST_CREATED',{withdrawalId:withdrawal.id,userId:user.id,amount:value,fee,netAmount,toAddress:destination,clientRequestId:withdrawal.clientRequestId});return {withdrawal,duplicate:false};
+  db.withdrawals.push(withdrawal);walletEntry(db,{userId:user.id,asset:'USDT',direction:'lock',amount:value,reason:'USDT withdrawal lock',refId:withdrawal.id,type:'WITHDRAWAL_LOCK'});const logPayload={withdrawalId:withdrawal.id,userId:user.id,amount:value,fee,netAmount,toAddress:destination,clientRequestId:withdrawal.clientRequestId};audit(db,'WITHDRAWAL_REQUEST_CREATED',logPayload);withdrawalLog('WITHDRAWAL_REQUEST_CREATED',logPayload);return {withdrawal,duplicate:false};
 }
 async function broadcastWithdrawal(db,withdrawal,{provider=null,signer=null,token=null}={}){
   if(!withdrawal||!activeWithdrawalStatuses().includes(String(withdrawal.status||'')))return withdrawal;
   if(withdrawal.txHash)return withdrawal;
-  const status=withdrawalHotWalletStatus();if(!status.configured)throw Error(`Withdrawal hot wallet is not configured: ${status.missing.join(', ')}`);
+  const status=withdrawalHotWalletStatus();withdrawalLog('WITHDRAWAL_HOT_WALLET_CHECK',{withdrawalId:withdrawal.id,configured:status.configured,missing:status.missing});if(!status.configured)throw Error(`Withdrawal hot wallet is not configured: ${status.missing.join(', ')}`);
   return withWithdrawalNonceLock(async()=>{
     if(withdrawal.txHash)return withdrawal;
-    const now=new Date().toISOString();Object.assign(withdrawal,{status:'broadcasting',updatedAt:now});audit(db,'WITHDRAWAL_BROADCASTING',{withdrawalId:withdrawal.id,userId:withdrawal.userId,amount:withdrawal.amount,netAmount:withdrawal.netAmount});
+    const now=new Date().toISOString();Object.assign(withdrawal,{status:'broadcasting',updatedAt:now});audit(db,'WITHDRAWAL_BROADCASTING',{withdrawalId:withdrawal.id,userId:withdrawal.userId,amount:withdrawal.amount,netAmount:withdrawal.netAmount});withdrawalLog('WITHDRAWAL_BROADCAST_START',{withdrawalId:withdrawal.id,userId:withdrawal.userId,amount:withdrawal.amount,netAmount:withdrawal.netAmount});
     const rpc=provider||withdrawalProvider(),hotSigner=signer||withdrawalSigner(rpc),fromAddress=getAddress(hotSigner.address),contract=token||withdrawalToken(hotSigner);
     const gasBalance=await rpc.getBalance(fromAddress),minGas=parseEther(String(minWithdrawalGasBalance()));
+    withdrawalLog('WITHDRAWAL_GAS_CHECK',{withdrawalId:withdrawal.id,fromAddress,gasBalance:formatUnits(gasBalance,18),minGas:formatUnits(minGas,18)});
     if(gasBalance<minGas)throw Error('Withdrawal hot wallet has insufficient BNB for gas');
     const rawAmount=parseUnits(String(withdrawal.netAmount),USDT_BEP20_DECIMALS),available=await contract.balanceOf(fromAddress);
+    withdrawalLog('WITHDRAWAL_HOT_WALLET_CHECK',{withdrawalId:withdrawal.id,fromAddress,usdtBalance:formatUnits(available,USDT_BEP20_DECIMALS),requiredUsdt:withdrawal.netAmount});
     if(available<rawAmount)throw Error('Withdrawal hot wallet has insufficient USDT balance');
     const tx=await contract.transfer(getAddress(withdrawal.toAddress||withdrawal.address),rawAmount);
     if(!tx.hash)throw Error('USDT withdrawal broadcast did not return a transaction hash');
-    const broadcastAt=new Date().toISOString();Object.assign(withdrawal,{status:'broadcasted',txHash:String(tx.hash).toLowerCase(),fromAddress,tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),broadcastAt,updatedAt:broadcastAt,confirmations:0,requiredConfirmations:withdrawalConfirmationsRequired()});audit(db,'WITHDRAWAL_BROADCASTED',{withdrawalId:withdrawal.id,userId:withdrawal.userId,txHash:withdrawal.txHash,fromAddress,toAddress:withdrawal.toAddress,netAmount:withdrawal.netAmount});return withdrawal;
+    const broadcastAt=new Date().toISOString();Object.assign(withdrawal,{status:'broadcasted',txHash:String(tx.hash).toLowerCase(),fromAddress,tokenContract:getAddress(process.env.USDT_BEP20_CONTRACT),broadcastAt,updatedAt:broadcastAt,confirmations:0,requiredConfirmations:withdrawalConfirmationsRequired()});const logPayload={withdrawalId:withdrawal.id,userId:withdrawal.userId,txHash:withdrawal.txHash,fromAddress,toAddress:withdrawal.toAddress,netAmount:withdrawal.netAmount};audit(db,'WITHDRAWAL_BROADCASTED',logPayload);withdrawalLog('WITHDRAWAL_BROADCASTED',logPayload);return withdrawal;
   });
 }
 function failWithdrawal(db,withdrawal,reason){
   if(!withdrawal||['confirmed','approved'].includes(String(withdrawal.status||'')))return withdrawal;
   const now=new Date().toISOString();Object.assign(withdrawal,{status:'failed',failureReason:String(reason||'Withdrawal failed'),failedAt:now,updatedAt:now});
   walletEntry(db,{userId:withdrawal.userId,asset:'USDT',direction:'unlock',amount:withdrawal.amount,reason:'USDT withdrawal failed rollback',refId:withdrawal.id,type:'WITHDRAWAL_ROLLBACK'});
-  audit(db,'WITHDRAWAL_FAILED',{withdrawalId:withdrawal.id,userId:withdrawal.userId,reason:withdrawal.failureReason,txHash:withdrawal.txHash||null});return withdrawal;
+  const logPayload={withdrawalId:withdrawal.id,userId:withdrawal.userId,reason:withdrawal.failureReason,txHash:withdrawal.txHash||null};audit(db,'WITHDRAWAL_FAILED',logPayload);withdrawalLog('WITHDRAWAL_FAILED',logPayload);return withdrawal;
 }
 async function processWithdrawalBroadcast(db,withdrawal,deps={}){
   try{return await broadcastWithdrawal(db,withdrawal,deps);}catch(error){return failWithdrawal(db,withdrawal,error.message);}
+}
+async function processWithdrawalAutomation(db,withdrawal,deps={}){
+  const enabled=withdrawalAutoEnabled(),status=withdrawalHotWalletStatus();
+  withdrawalLog('WITHDRAWAL_AUTO_START',{withdrawalId:withdrawal?.id||null,enabled,configured:status.configured,missing:status.missing});
+  if(!enabled){audit(db,'WITHDRAWAL_AUTO_SKIPPED',{withdrawalId:withdrawal?.id||null,reason:'WITHDRAWAL_AUTO_ENABLED=false'});return withdrawal;}
+  if(!status.configured){audit(db,'WITHDRAWAL_AUTO_SKIPPED',{withdrawalId:withdrawal?.id||null,reason:'missing_config',missing:status.missing});withdrawalLog('WITHDRAWAL_HOT_WALLET_CHECK',{withdrawalId:withdrawal?.id||null,configured:false,missing:status.missing});return withdrawal;}
+  return processWithdrawalBroadcast(db,withdrawal,deps);
 }
 async function updateWithdrawalConfirmations(db,withdrawal,provider){
   if(!withdrawal||String(withdrawal.status)!=='broadcasted'||!withdrawal.txHash)return false;
@@ -1633,7 +1646,7 @@ async function updateWithdrawalConfirmations(db,withdrawal,provider){
   if(confirmations<required)return false;
   const now=new Date().toISOString();Object.assign(withdrawal,{status:'confirmed',confirmedAt:now,updatedAt:now});
   walletEntry(db,{userId:withdrawal.userId,asset:'USDT',direction:'payout',amount:withdrawal.amount,reason:'USDT withdrawal confirmed',refId:withdrawal.id,type:'WITHDRAWAL_CONFIRMED'});
-  audit(db,'WITHDRAWAL_CONFIRMED',{withdrawalId:withdrawal.id,userId:withdrawal.userId,txHash:withdrawal.txHash,confirmations});return true;
+  const logPayload={withdrawalId:withdrawal.id,userId:withdrawal.userId,txHash:withdrawal.txHash,confirmations};audit(db,'WITHDRAWAL_CONFIRMED',logPayload);withdrawalLog('WITHDRAWAL_CONFIRMED',logPayload);return true;
 }
 async function pollWithdrawalWorker(){
   if(withdrawalRunning)return;withdrawalRunning=true;
@@ -1641,7 +1654,7 @@ async function pollWithdrawalWorker(){
     if(!withdrawalHotWalletStatus().configured)return;
     const db=readDB(),provider=withdrawalProvider();
     for(const withdrawal of db.withdrawals||[]){
-      if(String(withdrawal.status)==='pending')await processWithdrawalBroadcast(db,withdrawal,{provider});
+      if(String(withdrawal.status)==='pending')await processWithdrawalAutomation(db,withdrawal,{provider});
       if(String(withdrawal.status)==='broadcasted')await updateWithdrawalConfirmations(db,withdrawal,provider);
     }
     writeDB(db);
@@ -1967,7 +1980,7 @@ const server=http.createServer(async(req,res)=>{
       if(p==='/api/stakes'&&method==='POST'){try{const stake=await createStake(db,u,await body(req));writeDB(db);return send(res,201,{message:`${stake.stakeAsset} permanent stake created`,stake});}catch(error){return send(res,400,{error:error.message});}}
       if(p==='/api/transfers'&&method==='GET'){const records=(db.transferLedger||[]).filter(x=>x.userId===u.id).map(x=>({...x,counterparty:safeUser(userById(db,x.counterpartyId))}));return send(res,200,{transfers:records});}
       if(p==='/api/transfers'&&method==='POST'){const {receiver,amount,note}=await body(req), value=Number(amount), receiverUser=db.users.find(x=>x.id===receiver||x.email.toLowerCase()===String(receiver||'').toLowerCase());if(!receiverUser||receiverUser.role!=='user')return send(res,404,{error:'Receiver not found'});if(receiverUser.id===u.id)return send(res,400,{error:'You cannot transfer HB9 to yourself'});if(!Number.isFinite(value)||value<=0)return send(res,400,{error:'Transfer amount must be greater than zero'});if(value<setting(db,'minHb9Transfer'))return send(res,400,{error:`Minimum transfer is ${setting(db,'minHb9Transfer')} HB9`});const fee=roundCurrency(value*setting(db,'hb9TransferFeePercent')/100),available=walletBalances(db,u.id).hb9;if(value+fee>available)return send(res,400,{error:'Not enough available HB9 balance'});const createdAt=new Date().toISOString(),transfer={id:id('trf'),senderId:u.id,receiverId:receiverUser.id,amount:value,fee,status:'completed',note:String(note||''),createdAt};db.transfers=(db.transfers||[]);db.transferLedger=(db.transferLedger||[]);db.transfers.push(transfer);db.transferLedger.push({id:id('tlg'),transferId:transfer.id,userId:u.id,type:'HB9_TRANSFER_SENT',counterpartyId:receiverUser.id,amount:value,fee,createdAt,immutable:true},{id:id('tlg'),transferId:transfer.id,userId:receiverUser.id,type:'HB9_TRANSFER_RECEIVED',counterpartyId:u.id,amount:value,fee:0,createdAt,immutable:true});writeDB(db);return send(res,201,{message:'HB9 transfer completed',transfer});}
-      if(p==='/api/withdrawals'&&method==='POST'){try{const input=await body(req),result=createWithdrawalRequest(db,u,input),statusCode=result.duplicate?200:201;writeDB(db);if(!result.duplicate&&withdrawalAutoEnabled()){await processWithdrawalBroadcast(db,result.withdrawal);writeDB(db);}return send(res,statusCode,{message:result.withdrawal.status==='failed'?'Withdrawal failed before broadcast':result.duplicate?'Withdrawal request already exists':'USDT BEP20 withdrawal submitted for automatic payout.',withdrawal:result.withdrawal});}catch(error){writeDB(db);return send(res,400,{error:error.message});}}
+      if(p==='/api/withdrawals'&&method==='POST'){try{const input=await body(req),result=createWithdrawalRequest(db,u,input),statusCode=result.duplicate?200:201;writeDB(db);if(!result.duplicate){await processWithdrawalAutomation(db,result.withdrawal);writeDB(db);}return send(res,statusCode,{message:result.withdrawal.status==='failed'?'Withdrawal failed before broadcast':result.duplicate?'Withdrawal request already exists':'USDT BEP20 withdrawal submitted for automatic payout.',withdrawal:result.withdrawal});}catch(error){writeDB(db);return send(res,400,{error:error.message});}}
       if(p==='/api/admin/diagnostics/bnb-wallet'&&method==='GET'){const userId=url.searchParams.get('userId')||u.id;if(u.role!=='admin'&&userId!==u.id)return send(res,403,{error:'Admin only action'});const target=userById(db,userId);if(!target)return send(res,404,{error:'User not found'});return send(res,200,bnbLedgerDiagnostic(db,target.id));}
       if(u.role!=='admin')return send(res,403,{error:'Admin only action'});
       if(p==='/api/admin/transfer-settings'&&method==='PUT'){const {minHb9Transfer,hb9TransferFeePercent}=await body(req),min=Number(minHb9Transfer),fee=Number(hb9TransferFeePercent);if(!Number.isFinite(min)||min<0||!Number.isFinite(fee)||fee<0||fee>100)return send(res,400,{error:'Invalid transfer settings'});db.settings.minHb9Transfer=min;db.settings.hb9TransferFeePercent=fee;writeDB(db);return send(res,200,{message:'Transfer settings saved',settings:db.settings});}
@@ -1993,4 +2006,4 @@ const server=http.createServer(async(req,res)=>{
   } catch(e){ console.error(e);send(res,500,{error:'Server error'}); }
 });
 if(require.main===module)server.listen(PORT,async()=>{const storage=runtimeStorageDiagnostics();console.log('RUNTIME_DATA_FILE',{dataFile:storage.dataFile,envDataFile:storage.envDataFile,cwd:storage.cwd,appDir:storage.appDir});console.log('DEPOSIT_RUNTIME_MODE',DEPOSIT_RUNTIME_MODE);console.log('NOWPAYMENTS_DEPOSIT_GATEWAY',depositServiceStatus());console.log('WITHDRAWAL_HOT_WALLET',withdrawalHotWalletStatus());try{const db=readDB(), repair=repairQueuedSalaryPayouts(db,{startup:true});if(repair.checked)writeDB(db);console.log('SALARY_REPAIR_STARTUP',repair);const priceInfo=await hb9PriceSource(db,{interval:'1d',limit:1});console.log('HB9_PRICE_SOURCE',{source:priceInfo.source,price:priceInfo.price,fallbackUsed:priceInfo.fallbackUsed,error:priceInfo.error||null});}catch(error){console.log('HB9_PRICE_SOURCE',{source:'unavailable',price:null,fallbackUsed:false,error:error.message});}console.log('DAILY_SCHEDULER_UTC',{globalTeam:GLOBAL_TEAM_SCHEDULER_UTC.label,b1:B1_SCHEDULER_UTC.label,roi:B1_SCHEDULER_UTC.label});console.log('B1_SCHEDULER_ACTIVE',{timeUtc:B1_SCHEDULER_UTC.label,enabled:true});console.log('SALARY_SCHEDULER_ACTIVE',{dates:SALARY_SCHEDULER_DATES,timeUtc:SALARY_SCHEDULER_UTC.label});startDailySchedulers();startWithdrawalWorker();console.log(`HB9 Staking running at ${APP_URL}`);});
-module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,markExpiredNowPaymentsDeposits,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,getUserDirectBusinessUsd,calculateB1IncomeForStake,incomeContext,b1StakeContexts,dailyB1Percent,b1IncomeKey,createWithdrawalRequest,processWithdrawalBroadcast,broadcastWithdrawal,failWithdrawal,updateWithdrawalConfirmations,withdrawalHotWalletStatus,pollWithdrawalWorker,startWithdrawalWorker,processSalaryPayouts,repairQueuedSalaryPayouts,salaryDuplicateKey,isSalaryRunDate,nextSalaryDueTime,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,startDepositWatcher,startSweepWorker,pollDepositWatcher,pollSweepWorker,DEPOSIT_RUNTIME_MODE,server};
+module.exports={configuredDepositWatcherStartBlock,dataFile:DATA,readDB,resolveDataFile,runtimeStorageDiagnostics,writeDB,depositDerivationPath,depositPrivateSigner,depositSignerDiagnostics,derivedDepositAddress,ensureDepositAddress,hdBaseDerivationPath,hdFingerprint,hdWalletConsistencyStatus,isZeroValueBep20Transfer,parseBep20TransferWatcherLog,processDepositWatcherLogs,recordBep20Transfer,repairBep20RawUnitAmounts,repairBnbConversionPrecision,repairReferralB1Income,resolveDepositWatcherLiveScanRange,resolveDepositWatcherStart,validateBep20TransferEvent,createSweepCandidates,updateBroadcastedSweep,updateDepositConfirmations,retrySweep,sweepServiceStatus,migrateUnsafeDepositAddresses,createNowPaymentsDeposit,creditNowPaymentsDeposit,markExpiredNowPaymentsDeposits,verifyNowPaymentsSignature,sortedJson,adminFundTransfer,walletBalances,bnbLedgerDiagnostic,accrueGlobalPoints,globalPointSummary,globalPointEligibilityDate,globalTeamUnits,dashboard,teamLevelsReport,convertUsdtToAsset,createStake,bnbMarket,exchangeReserveReport,hb9PriceSource,getUserDirectBusinessUsd,calculateB1IncomeForStake,incomeContext,b1StakeContexts,dailyB1Percent,b1IncomeKey,createWithdrawalRequest,processWithdrawalAutomation,processWithdrawalBroadcast,broadcastWithdrawal,failWithdrawal,updateWithdrawalConfirmations,withdrawalHotWalletStatus,pollWithdrawalWorker,startWithdrawalWorker,processSalaryPayouts,repairQueuedSalaryPayouts,salaryDuplicateKey,isSalaryRunDate,nextSalaryDueTime,runGlobalTeamDaily,runRoiDaily,lastDueDate,nextDueTime,startDailySchedulers,startDepositWatcher,startSweepWorker,pollDepositWatcher,pollSweepWorker,DEPOSIT_RUNTIME_MODE,server};
