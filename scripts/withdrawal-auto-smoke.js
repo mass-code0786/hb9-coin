@@ -45,7 +45,7 @@ function db() {
     salary_ranks: [],
     salary_qualifications: [],
     salary_payouts: [],
-    settings: { minWithdrawal: 10, maxWithdrawal: 80, withdrawalFeePercent: 5 }
+    settings: { minWithdrawal: 9, maxWithdrawal: 80, withdrawalFeePercent: 5 }
   };
 }
 
@@ -71,6 +71,14 @@ function deps({ usdt = 100, bnb = '0.01', receipt = null, latest = 100, transfer
 }
 
 (async () => {
+  assert.throws(() => createWithdrawalRequest(db(), db().users[0], { amount: 8.99, address: userAddress }), /Minimum withdrawal is 9 USDT/, '$8.99 withdrawal is rejected');
+  const minDb = db();
+  const minRequest = createWithdrawalRequest(minDb, minDb.users[0], { amount: 9, address: userAddress });
+  assert.strictEqual(minRequest.withdrawal.amount, 9, '$9.00 withdrawal is accepted');
+  const tenDb = db();
+  const tenRequest = createWithdrawalRequest(tenDb, tenDb.users[0], { amount: 10, address: userAddress });
+  assert.strictEqual(tenRequest.withdrawal.amount, 10, '$10.00 withdrawal is accepted');
+
   const successDb = db(), user = successDb.users[0];
   const first = createWithdrawalRequest(successDb, user, { amount: 20, address: userAddress, clientRequestId: 'wd-success' });
   assert.strictEqual(walletBalances(successDb, user.id).withdrawableUsdt, 80, 'withdrawal amount is locked immediately');

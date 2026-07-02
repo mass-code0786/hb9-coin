@@ -57,6 +57,7 @@ const HB9_TOTAL_SUPPLY = 1000000;
 const HB9_EXCHANGE_RESERVE_TOTAL = Math.max(0, Number(process.env.HB9_EXCHANGE_RESERVE_TOTAL || HB9_TOTAL_SUPPLY));
 const BNB_EXCHANGE_RESERVE_TOTAL = process.env.BNB_EXCHANGE_RESERVE_TOTAL === undefined ? null : Math.max(0, Number(process.env.BNB_EXCHANGE_RESERVE_TOTAL || 0));
 const DEFAULT_PRICE_OFFSET = 0.09;
+const DEFAULT_MIN_WITHDRAWAL = 9;
 const TEST_HB9_PRICE = 2.25;
 const HB9_PRICE_FALLBACK_ENV = 'HB9_PRICE_FALLBACK';
 const LEVEL_INCOME_PERCENTS = [0.25,0.25,0.25,0.25,0.25,0.25,0.5,0.5,0.5,0.5,0.5,0.5,0.5,1,1,1,1,1,1,1];
@@ -113,7 +114,7 @@ function ensureBootstrapAdmin(db){
   if(!adminBootstrapLogged){console.log('ADMIN_BOOTSTRAP_READY',{email:user.email,userId:user.id,created,passwordUpdated});adminBootstrapLogged=true;}
   return changed;
 }
-function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const repaired=repairBep20RawUnitAmounts(db).corrected, bnbRepaired=repairBnbConversionPrecision(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(repaired||bnbRepaired||bootstrapped)writeDB(db); return db; }
+function readDB() { if (!fs.existsSync(DATA)) initializeDB(); const db=JSON.parse(fs.readFileSync(DATA, 'utf8')); ensureSupply(db); const settingsUpdated=ensureWithdrawalMinimumDefault(db), repaired=repairBep20RawUnitAmounts(db).corrected, bnbRepaired=repairBnbConversionPrecision(db).corrected, bootstrapped=ensureBootstrapAdmin(db); if(settingsUpdated||repaired||bnbRepaired||bootstrapped)writeDB(db); return db; }
 function writeDB(db) { fs.mkdirSync(path.dirname(DATA), {recursive:true}); fs.writeFileSync(DATA, JSON.stringify(db, null, 2)); }
 function normalizeRuntimeAddress(address){try{const value=String(address||'').trim();return isAddress(value)?getAddress(value).toLowerCase():null;}catch(_){return null;}}
 function normalizeUsdtBep20WalletAddress(address){
@@ -155,7 +156,13 @@ function syncHb9FallbackPrice(db){
 }
 function baseSettings(){
   const fallback=envHb9FallbackPrice();
-  return {dailyRoi:2,directMultiplier:2,referralPercent:10,globalActivityMin:5,globalActivityMax:15,globalPointValue:0.02,hb9Price:fallback,priceMode:'icp_proxy',exchangeEnabled:true,tradingFeePercent:0,buyFeePercent:0,sellFeePercent:0,fallbackPrice:fallback,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,minWithdrawal:20,maxWithdrawal:0,withdrawalFeePercent:5,minHb9Transfer:1,hb9TransferFeePercent:0,manualWithdrawalApproval:true,treasuryWalletBSC:process.env.TREASURY_WALLET_BSC||''};
+  return {dailyRoi:2,directMultiplier:2,referralPercent:10,globalActivityMin:5,globalActivityMax:15,globalPointValue:0.02,hb9Price:fallback,priceMode:'icp_proxy',exchangeEnabled:true,tradingFeePercent:0,buyFeePercent:0,sellFeePercent:0,fallbackPrice:fallback,priceOffset:DEFAULT_PRICE_OFFSET,spreadPercent:5,manualOverrideEnabled:false,minWithdrawal:DEFAULT_MIN_WITHDRAWAL,maxWithdrawal:0,withdrawalFeePercent:5,minHb9Transfer:1,hb9TransferFeePercent:0,manualWithdrawalApproval:true,treasuryWalletBSC:process.env.TREASURY_WALLET_BSC||''};
+}
+function ensureWithdrawalMinimumDefault(db){
+  db.settings=db.settings||{};
+  if(Number(db.settings.minWithdrawal)!==20)return false;
+  db.settings.minWithdrawal=DEFAULT_MIN_WITHDRAWAL;
+  return true;
 }
 function emptyDB(){
   const now = new Date().toISOString();

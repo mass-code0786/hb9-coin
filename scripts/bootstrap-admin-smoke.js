@@ -124,7 +124,7 @@ async function readJsonWhenStable(file) {
     hb9_supply: { asset: 'HB9', totalSupply: 1000000, fixed: true, createdAt: now },
     hb9_market_settings: { fallbackPrice: null, priceOffset: 0.09, spreadPercent: 5, manualOverrideEnabled: false, updatedBy: 'system', updatedAt: now },
     hb9_price_history: [],
-    settings: { dailyRoi: 2, directMultiplier: 2, referralPercent: 10, globalActivityMin: 5, globalActivityMax: 15, globalPointValue: 0.02, hb9Price: null, fallbackPrice: null, priceOffset: 0.09, spreadPercent: 5, minWithdrawal: 20, withdrawalFeePercent: 5 }
+    settings: { dailyRoi: 2, directMultiplier: 2, referralPercent: 10, globalActivityMin: 5, globalActivityMax: 15, globalPointValue: 0.02, hb9Price: null, fallbackPrice: null, priceOffset: 0.09, spreadPercent: 5, minWithdrawal: 9, withdrawalFeePercent: 5 }
   }, null, 2));
 
   const child = spawn(process.execPath, ['server.js'], {
